@@ -1,0 +1,20 @@
+{
+  "name": "crawler-service",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts",
+    "setup-browsers": "bash setup-browsers.sh"
+  },
+  "dependencies": {
+    "hono": "4.6.14",
+    "playwright": "1.57.0",
+    "turndown": "7.2.0"
+  },
+  "devDependencies": {
+    "@types/turndown": "5.0.5",
+    "@types/bun": "latest"
+  }
+}
