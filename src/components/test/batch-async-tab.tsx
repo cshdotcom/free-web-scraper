@@ -11,6 +11,7 @@ import { Play, Loader2, CheckCircle2, Timer, ListChecks } from 'lucide-react';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
 import { LoadingButton, ExportButtons, MarkdownRender, EmptyState } from './shared';
+import { useI18n } from '@/components/i18n';
 
 /** Escape a plain string for safe inclusion in HTML text content (title, <pre>). */
 function escapeHtml(s: string): string {
@@ -38,8 +39,15 @@ interface BatchStatus {
   error?: string;
 }
 
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function BatchAsyncTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [urls, setUrls] = React.useState(
     'https://example.com\nhttps://example.org\nhttps://example.net',
@@ -133,9 +141,9 @@ export function BatchAsyncTab() {
   const combinedMd = React.useMemo(() => {
     if (!items.length) return undefined;
     return items
-      .map((it) => `# ${it.url}\n\nSource: <${it.url}>\n\n${it.data?.markdown || '(no markdown)'}`)
+      .map((it) => `# ${it.url}\n\nSource: <${it.url}>\n\n${it.data?.markdown || t('empty.noMarkdownShorthand')}`)
       .join('\n\n---\n\n');
-  }, [items]);
+  }, [items, t]);
 
   // Combined standalone HTML export. For each result we embed its raw `html`
   // when available, otherwise fall back to the markdown wrapped in <pre>.
@@ -149,18 +157,20 @@ export function BatchAsyncTab() {
           ? html
           : md
             ? `<pre>${escapeHtml(md)}</pre>`
-            : '<p>(no content)</p>';
+            : `<p>${escapeHtml(t('empty.noContent'))}</p>`;
         return `<h2>${escapeHtml(it.url)}</h2><div>${inner}</div>`;
       })
       .join('\n');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Batch results</title></head><body>${body}</body></html>`;
-  }, [items]);
+  }, [items, t]);
+
+  const urlCount = urls.split('\n').filter((s) => s.trim()).length;
 
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="ba-urls" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          URLs <span className="text-zinc-400">(one per line)</span>
+          {t('label.urlsOnePerLine')}
         </Label>
         <Textarea
           id="ba-urls"
@@ -175,7 +185,7 @@ export function BatchAsyncTab() {
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <div>
             <Label htmlFor="ba-timeout" className="mb-1 block text-xs font-medium text-muted-foreground">
-              timeout (ms)
+              {t('label.timeoutMs')}
             </Label>
             <Input
               id="ba-timeout"
@@ -187,7 +197,7 @@ export function BatchAsyncTab() {
           </div>
           <div>
             <Label htmlFor="ba-retries" className="mb-1 block text-xs font-medium text-muted-foreground">
-              maxRetries
+              {t('label.maxRetries')}
             </Label>
             <Input
               id="ba-retries"
@@ -205,15 +215,15 @@ export function BatchAsyncTab() {
           {!jobId ? (
             <LoadingButton loading={starting} onClick={onStart} className="gap-1.5">
               <Play className="h-3.5 w-3.5" />
-              Start batch
+              {t('btn.startBatch')}
             </LoadingButton>
           ) : (
             <Button variant="outline" size="sm" onClick={onReset}>
-              Reset
+              {t('btn.reset')}
             </Button>
           )}
           <Badge variant="outline" className="font-mono">
-            {urls.split('\n').filter((s) => s.trim()).length} URLs
+            {fmt(t('misc.Nurls'), { N: urlCount })}
           </Badge>
         </div>
       </div>
@@ -234,21 +244,25 @@ export function BatchAsyncTab() {
                 <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
               )}
               <Badge variant="outline" className="font-mono">
-                status: {status.status}
+                {fmt(t('misc.statusLabel'), { X: status.status })}
               </Badge>
               <Badge variant="outline" className="font-mono">
-                {status.completed} / {status.total}
+                {fmt(t('misc.Ncompleted'), { N: status.completed, M: status.total })}
               </Badge>
               {running && (
                 <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                  <Timer className="h-3 w-3" /> polling every 2s
+                  <Timer className="h-3 w-3" /> {t('status.pollingEvery2s')}
                 </span>
               )}
             </div>
-            <code className="truncate text-[11px] text-muted-foreground">id: {jobId}</code>
+            <code className="truncate text-[11px] text-muted-foreground">
+              {fmt(t('misc.idLabel'), { X: jobId })}
+            </code>
           </div>
           <Progress value={pct} className="h-2" />
-          <div className="mt-1.5 text-right text-[11px] text-muted-foreground">{pct}%</div>
+          <div className="mt-1.5 text-right text-[11px] text-muted-foreground">
+            {fmt(t('misc.Npercent'), { N: pct })}
+          </div>
         </div>
       )}
 
@@ -257,15 +271,15 @@ export function BatchAsyncTab() {
           {status?.status === 'completed' ? (
             <>
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              Batch finished — {items.length} pages scraped.
+              {fmt(t('status.batchFinished'), { N: items.length })}
             </>
           ) : running ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600 dark:text-amber-400" />
-              Scraping in progress…
+              {t('status.batchInProgress')}
             </>
           ) : (
-            <>Idle</>
+            <>{t('status.idle')}</>
           )}
         </div>
         {status?.data && status.data.length > 0 && (
@@ -298,7 +312,7 @@ export function BatchAsyncTab() {
                   <MarkdownRender source={it.data.markdown} />
                 ) : (
                   <p className="text-xs text-rose-700 dark:text-rose-300">
-                    Error: {it.error || 'no data returned'}
+                    {fmt(t('misc.errorPrefix'), { X: it.error || t('empty.noDataReturned') })}
                   </p>
                 )}
               </div>
@@ -308,15 +322,15 @@ export function BatchAsyncTab() {
       ) : (
         !running && (
           <EmptyState
-            title="No batch started"
-            hint="Add URLs above and click Start batch."
+            title={t('empty.noBatchStarted')}
+            hint={t('empty.noBatchStartedHint')}
           />
         )
       )}
 
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <ListChecks className="h-3.5 w-3.5" />
-        Async batch jobs return immediately — the response only contains the job id. Poll until status is &quot;completed&quot;.
+        {t('misc.tipAsyncBatch')}
       </div>
     </div>
   );

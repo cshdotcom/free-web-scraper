@@ -8,6 +8,7 @@ import { Loader2, Download, Copy, Check, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { downloadFile, prettyJson, type ApiResult } from './api-client';
+import { useI18n } from '@/components/i18n';
 
 /** Button that shows a spinner while loading. */
 export function LoadingButton({
@@ -52,11 +53,12 @@ interface StatusBarProps {
 
 /** Status bar showing response time, HTTP code, success badge, plus extra badges. */
 export function StatusBar({ result, loading, badges }: StatusBarProps) {
+  const { t } = useI18n();
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        <span>Request in flight…</span>
+        <span>{t('status.requestInFlight')}</span>
       </div>
     );
   }
@@ -64,7 +66,7 @@ export function StatusBar({ result, loading, badges }: StatusBarProps) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
-        <span>Idle</span>
+        <span>{t('status.idle')}</span>
       </div>
     );
   }
@@ -79,13 +81,13 @@ export function StatusBar({ result, loading, badges }: StatusBarProps) {
             : 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300',
         )}
       >
-        {result.ok ? '✓ success' : '✗ failed'}
+        {result.ok ? t('status.success') : t('status.failed')}
       </Badge>
       <Badge variant="outline" className="font-mono">
-        HTTP {result.status || '—'}
+        {t('misc.httpN').replace('{N}', String(result.status || '—'))}
       </Badge>
       <Badge variant="outline" className="font-mono">
-        {result.durationMs} ms
+        {t('misc.Nms').replace('{N}', String(result.durationMs))}
       </Badge>
       {badges}
     </div>
@@ -101,6 +103,7 @@ interface ExportButtonsProps {
 
 /** JSON / MD / HTML export buttons. HTML button only renders when `html` is defined. */
 export function ExportButtons({ json, markdown, html, filenameBase }: ExportButtonsProps) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center gap-1.5">
       <Button
@@ -109,11 +112,11 @@ export function ExportButtons({ json, markdown, html, filenameBase }: ExportButt
         className="gap-1.5"
         onClick={() => {
           downloadFile(`${filenameBase}.json`, prettyJson(json), 'application/json');
-          toast.success('Exported JSON');
+          toast.success(t('misc.exportedJson'));
         }}
       >
         <Download className="h-3.5 w-3.5" />
-        JSON
+        {t('btn.exportJson')}
       </Button>
       {markdown !== undefined && (
         <Button
@@ -122,11 +125,11 @@ export function ExportButtons({ json, markdown, html, filenameBase }: ExportButt
           className="gap-1.5"
           onClick={() => {
             downloadFile(`${filenameBase}.md`, markdown, 'text/markdown');
-            toast.success('Exported Markdown');
+            toast.success(t('misc.exportedMarkdown'));
           }}
         >
           <Download className="h-3.5 w-3.5" />
-          MD
+          {t('btn.exportMd')}
         </Button>
       )}
       {html !== undefined && (
@@ -136,11 +139,11 @@ export function ExportButtons({ json, markdown, html, filenameBase }: ExportButt
           className="gap-1.5"
           onClick={() => {
             downloadFile(`${filenameBase}.html`, html, 'text/html');
-            toast.success('Exported HTML');
+            toast.success(t('misc.exportedHtml'));
           }}
         >
           <FileText className="h-3.5 w-3.5" />
-          HTML
+          {t('btn.exportHtml')}
         </Button>
       )}
     </div>
@@ -148,8 +151,10 @@ export function ExportButtons({ json, markdown, html, filenameBase }: ExportButt
 }
 
 /** Small copy-to-clipboard icon button. */
-export function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
+export function CopyButton({ value, label }: { value: string; label?: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = React.useState(false);
+  const btnLabel = label ?? t('btn.copy');
   return (
     <Button
       variant="ghost"
@@ -159,15 +164,15 @@ export function CopyButton({ value, label = 'Copy' }: { value: string; label?: s
         try {
           await navigator.clipboard.writeText(value);
           setCopied(true);
-          toast.success('Copied');
+          toast.success(t('misc.copied'));
           setTimeout(() => setCopied(false), 1200);
         } catch {
-          toast.error('Copy failed');
+          toast.error(t('misc.copyFailed'));
         }
       }}
     >
       {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? 'Copied' : label}
+      {copied ? t('misc.copied') : btnLabel}
     </Button>
   );
 }

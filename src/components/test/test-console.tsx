@@ -12,6 +12,7 @@ import { SearchTab } from './search-tab';
 import { BatchAsyncTab } from './batch-async-tab';
 import { Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/components/i18n';
 
 interface TabTriggerProps {
   value: string;
@@ -35,6 +36,7 @@ function TabItem({ value, children, disabled, title }: TabTriggerProps) {
 
 export function TestConsole() {
   const { canRun, requiresAuth } = useTestConsole();
+  const { t } = useI18n();
   const locked = requiresAuth && !canRun;
 
   return (
@@ -45,13 +47,11 @@ export function TestConsole() {
       <div className="mx-auto max-w-5xl px-6 py-16">
         <div className="mb-8 max-w-2xl">
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-            Interactive
+            {t('console.interactive')}
           </div>
-          <h2 className="text-2xl font-semibold tracking-tight">Test console</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t('console.title')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Try every endpoint directly from this page. All requests go through the
-            Next.js proxy routes — no CORS, no exposed ports. Save your API key above once,
-            and it will be reused across all tabs.
+            {t('console.subtitle')}
           </p>
         </div>
 
@@ -65,21 +65,21 @@ export function TestConsole() {
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300">
                 <Lock className="h-6 w-6" />
               </div>
-              <p className="text-sm font-medium">Enter your API key to run tests</p>
+              <p className="text-sm font-medium">{t('console.locked')}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                The console is locked until you save a valid key in the box above.
+                {t('console.lockedHint')}
               </p>
             </div>
           </div>
         ) : (
           <Tabs defaultValue="scrape">
             <TabsList className="mb-5 h-auto flex-wrap">
-              <TabItem value="scrape">Scrape</TabItem>
-              <TabItem value="batch-sync">Batch (Sync)</TabItem>
-              <TabItem value="crawl">Crawl</TabItem>
-              <TabItem value="map">Map</TabItem>
-              <TabItem value="search">Search</TabItem>
-              <TabItem value="batch-async">Batch (Async)</TabItem>
+              <TabItem value="scrape">{t('tab.scrape')}</TabItem>
+              <TabItem value="batch-sync">{t('tab.batchSync')}</TabItem>
+              <TabItem value="crawl">{t('tab.crawl')}</TabItem>
+              <TabItem value="map">{t('tab.map')}</TabItem>
+              <TabItem value="search">{t('tab.search')}</TabItem>
+              <TabItem value="batch-async">{t('tab.batchAsync')}</TabItem>
             </TabsList>
             <TabsContent value="scrape" className="mt-0">
               <ScrapeTab />

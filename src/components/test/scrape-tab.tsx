@@ -25,6 +25,7 @@ import {
   RawJsonView,
   EmptyState,
 } from './shared';
+import { useI18n } from '@/components/i18n';
 
 type Format = 'markdown' | 'html' | 'rawHtml' | 'links' | 'screenshot';
 const ALL_FORMATS: Format[] = ['markdown', 'html', 'rawHtml', 'links', 'screenshot'];
@@ -55,8 +56,15 @@ interface ScrapeResponse {
   error?: string;
 }
 
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function ScrapeTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [url, setUrl] = React.useState('https://example.com');
   const [formats, setFormats] = React.useState<Format[]>(['markdown', 'html', 'links']);
@@ -158,7 +166,7 @@ export function ScrapeTab() {
       {/* URL + run */}
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="scrape-url" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          URL
+          {t('label.url')}
         </Label>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="relative flex-1">
@@ -166,7 +174,7 @@ export function ScrapeTab() {
             <Input
               id="scrape-url"
               type="url"
-              placeholder="https://example.com"
+              placeholder={t('misc.urlPlaceholder')}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => {
@@ -177,7 +185,7 @@ export function ScrapeTab() {
           </div>
           <LoadingButton loading={loading} onClick={onRun} className="gap-1.5">
             <Play className="h-3.5 w-3.5" />
-            Scrape
+            {t('btn.scrape')}
           </LoadingButton>
           <Button
             variant="ghost"
@@ -186,7 +194,7 @@ export function ScrapeTab() {
             onClick={() => setAdvancedOpen((v) => !v)}
           >
             <Settings2 className="h-3.5 w-3.5" />
-            {advancedOpen ? 'Hide' : 'Options'}
+            {advancedOpen ? t('btn.hide') : t('btn.options')}
           </Button>
         </div>
 
@@ -201,7 +209,7 @@ export function ScrapeTab() {
               {/* Formats */}
               <div className="sm:col-span-2">
                 <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Formats
+                  {t('label.formats')}
                 </Label>
                 <div className="flex flex-wrap gap-2">
                   {ALL_FORMATS.map((f) => {
@@ -249,9 +257,9 @@ export function ScrapeTab() {
 
               <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
                 <div>
-                  <Label className="text-xs">onlyMainContent</Label>
+                  <Label className="text-xs">{t('label.onlyMainContent')}</Label>
                   <p className="text-[10px] text-muted-foreground">
-                    Strip nav / footer noise.
+                    {t('label.onlyMainContentHint')}
                   </p>
                 </div>
                 <Switch checked={onlyMainContent} onCheckedChange={setOnlyMainContent} />
@@ -259,7 +267,7 @@ export function ScrapeTab() {
 
               <div>
                 <Label htmlFor="inc-tags" className="mb-1 block text-xs font-medium text-muted-foreground">
-                  includeTags <span className="text-zinc-400">(comma-separated CSS selectors)</span>
+                  {t('label.includeTagsHint')}
                 </Label>
                 <Input
                   id="inc-tags"
@@ -271,7 +279,7 @@ export function ScrapeTab() {
               </div>
               <div>
                 <Label htmlFor="exc-tags" className="mb-1 block text-xs font-medium text-muted-foreground">
-                  excludeTags <span className="text-zinc-400">(comma-separated CSS selectors)</span>
+                  {t('label.excludeTagsHint')}
                 </Label>
                 <Input
                   id="exc-tags"
@@ -283,7 +291,7 @@ export function ScrapeTab() {
               </div>
               <div>
                 <Label htmlFor="timeout" className="mb-1 block text-xs font-medium text-muted-foreground">
-                  timeout (ms)
+                  {t('label.timeoutMs')}
                 </Label>
                 <Input
                   id="timeout"
@@ -294,7 +302,7 @@ export function ScrapeTab() {
               </div>
               <div>
                 <Label htmlFor="wait-for" className="mb-1 block text-xs font-medium text-muted-foreground">
-                  waitFor (ms)
+                  {t('label.waitForMs')}
                 </Label>
                 <Input
                   id="wait-for"
@@ -305,7 +313,7 @@ export function ScrapeTab() {
               </div>
               <div>
                 <Label htmlFor="max-retries" className="mb-1 block text-xs font-medium text-muted-foreground">
-                  maxRetries
+                  {t('label.maxRetries')}
                 </Label>
                 <Input
                   id="max-retries"
@@ -329,7 +337,7 @@ export function ScrapeTab() {
           badges={
             strategy ? (
               <Badge variant="outline" className="font-mono">
-                strategy: {strategy}
+                {fmt(t('status.strategyBadge'), { X: strategy })}
               </Badge>
             ) : null
           }
@@ -349,11 +357,11 @@ export function ScrapeTab() {
         {attempts !== undefined && (
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
             <Badge variant="outline" className="font-mono">
-              attempts: {attempts}
+              {fmt(t('status.attemptsBadge'), { N: attempts })}
             </Badge>
             {data?.metadata?.url && (
               <span className="truncate">
-                source: <code className="font-mono">{String(data.metadata.url)}</code>
+                {t('status.source')} <code className="font-mono">{String(data.metadata.url)}</code>
               </span>
             )}
           </div>
@@ -363,29 +371,29 @@ export function ScrapeTab() {
           <TabsList className="mb-3 h-auto flex-wrap">
             {showTab('markdown') && (
               <TabsTrigger value="markdown" className="gap-1.5">
-                <FileText className="h-3.5 w-3.5" /> Markdown
+                <FileText className="h-3.5 w-3.5" /> {t('label.markdown')}
               </TabsTrigger>
             )}
             {showTab('html') && (
               <TabsTrigger value="html" className="gap-1.5">
-                <Code className="h-3.5 w-3.5" /> HTML
+                <Code className="h-3.5 w-3.5" /> {t('label.html')}
               </TabsTrigger>
             )}
             {showTab('links') && (
               <TabsTrigger value="links" className="gap-1.5">
-                <List className="h-3.5 w-3.5" /> Links
+                <List className="h-3.5 w-3.5" /> {t('label.links')}
               </TabsTrigger>
             )}
             {showTab('screenshot') && (
               <TabsTrigger value="screenshot" className="gap-1.5">
-                <ImageIcon className="h-3.5 w-3.5" /> Screenshot
+                <ImageIcon className="h-3.5 w-3.5" /> {t('label.screenshot')}
               </TabsTrigger>
             )}
             <TabsTrigger value="metadata" className="gap-1.5">
-              <Hash className="h-3.5 w-3.5" /> Metadata
+              <Hash className="h-3.5 w-3.5" /> {t('label.metadata')}
             </TabsTrigger>
             <TabsTrigger value="raw" className="gap-1.5">
-              <Code className="h-3.5 w-3.5" /> Raw
+              <Code className="h-3.5 w-3.5" /> {t('label.raw')}
             </TabsTrigger>
           </TabsList>
 
@@ -395,7 +403,7 @@ export function ScrapeTab() {
                 <MarkdownRender source={data.markdown} />
               </div>
             ) : (
-              <EmptyState title="No markdown in response" hint="Add 'markdown' to formats and re-run." />
+              <EmptyState title={t('empty.noMarkdown')} hint={t('empty.noMarkdownHint')} />
             )}
           </TabsContent>
           <TabsContent value="html">
@@ -404,7 +412,7 @@ export function ScrapeTab() {
                 <code className="font-mono whitespace-pre-wrap break-all">{data.html}</code>
               </pre>
             ) : (
-              <EmptyState title="No HTML in response" hint="Add 'html' to formats and re-run." />
+              <EmptyState title={t('empty.noHtml')} hint={t('empty.noHtmlHint')} />
             )}
           </TabsContent>
           <TabsContent value="links">
@@ -438,7 +446,7 @@ export function ScrapeTab() {
                 </ul>
               </div>
             ) : (
-              <EmptyState title="No links in response" hint="Add 'links' to formats and re-run." />
+              <EmptyState title={t('empty.noLinks')} hint={t('empty.noLinksHint')} />
             )}
           </TabsContent>
           <TabsContent value="screenshot">
@@ -451,7 +459,7 @@ export function ScrapeTab() {
                 />
               </div>
             ) : (
-              <EmptyState title="No screenshot in response" hint="Add 'screenshot' to formats and re-run." />
+              <EmptyState title={t('empty.noScreenshot')} hint={t('empty.noScreenshotHint')} />
             )}
           </TabsContent>
           <TabsContent value="metadata">
@@ -473,7 +481,7 @@ export function ScrapeTab() {
                 </Table>
               </div>
             ) : (
-              <EmptyState title="No metadata in response" />
+              <EmptyState title={t('empty.noMetadata')} />
             )}
           </TabsContent>
           <TabsContent value="raw">

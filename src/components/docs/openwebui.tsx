@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Plug, ExternalLink } from 'lucide-react';
 import { CodeBlock } from '@/components/code-block';
+import { useI18n } from '@/components/i18n';
 
 interface OpenWebUIProps {
   baseUrl: string;
@@ -32,6 +33,7 @@ const SAMPLE_RESPONSE = `{
 }`;
 
 export function OpenWebUI({ baseUrl }: OpenWebUIProps) {
+  const { t } = useI18n();
   return (
     <section
       id="openwebui"
@@ -41,15 +43,15 @@ export function OpenWebUI({ baseUrl }: OpenWebUIProps) {
         <div className="mb-8 max-w-2xl">
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
             <Plug className="h-3 w-3" />
-            OpenWebUI integration
+            {t('openwebui.title')}
           </div>
           <h2 className="text-2xl font-semibold tracking-tight">
-            Use NodeByte Crawl as your OpenWebUI search backend
+            {t('openwebui.subtitle')}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             The <code className="font-mono text-xs">GET /search</code> endpoint speaks the
             SearxNG JSON protocol. Point OpenWebUI at it and your AI chat gets live web search
-            across Bing, DuckDuckGo, Brave, Mojeek, and Startpage — with one failing engine
+            across Bing, DuckDuckGo, SearXNG, and Wikipedia — with one failing engine
             never breaking the request.
           </p>
         </div>
@@ -57,7 +59,7 @@ export function OpenWebUI({ baseUrl }: OpenWebUIProps) {
         <div className="grid gap-5 lg:grid-cols-2">
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5 dark:border-emerald-500/20">
             <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
-              How to wire it up
+              {t('openwebui.title')}
             </h3>
             <ol className="mt-3 space-y-2.5 text-sm text-zinc-700 dark:text-zinc-300">
               <li className="flex gap-2">
@@ -107,7 +109,7 @@ export function OpenWebUI({ baseUrl }: OpenWebUIProps) {
           <div className="space-y-3">
             <div>
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Endpoint
+                {t('endpoints.title')}
               </h3>
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40">
                 <span className="inline-flex items-center gap-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-300">
@@ -119,7 +121,7 @@ export function OpenWebUI({ baseUrl }: OpenWebUIProps) {
             </div>
             <div>
               <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Response (SearxNG format)
+                {t('endpoints.responseExample')}
               </h3>
               <CodeBlock code={SAMPLE_RESPONSE} language="json" title="searxng.json" />
             </div>

@@ -502,3 +502,79 @@ Task: Crawl formats selector, search default 50, HTML export on all tabs
 
 ### Constraints
 - Only `src/components/test/*` edited. Neutral/zinc/emerald palette preserved. TS strict, no `any`, no test code.
+
+---
+Task ID: FIX-5
+Agent: full-stack-developer (crawl-data-i18n-searxng-showkey)
+Task: Fix crawl data parsing, complete i18n, custom SearXNG UI, Show key button
+
+### Bug 1: Crawl data structure (CRITICAL — fixed)
+- Root cause: `CrawlPage` interface in `src/components/test/crawl-tab.tsx` was FLAT (`p.markdown`) but the API returns a NESTED structure (`p.data.markdown`). So every page showed "(no markdown)".
+- Restructured `CrawlPage` interface to `CrawlPage { url; success; error?; data?: CrawlPageData }` where `CrawlPageData` holds `markdown / html / rawHtml / links / screenshot / metadata / strategy`.
+- Updated every reference: `p.markdown` → `p.data?.markdown`, `p.html` → `p.data?.html`, `p.rawHtml` → `p.data?.rawHtml`, `p.links` → `p.data?.links`, `p.screenshot` → `p.data?.screenshot`, `p.metadata?.title` → `p.data?.metadata?.title`.
+- `combinedMd` and `combinedHtml` memos updated to use the nested `p.data?.markdown` / `p.data?.html` paths.
+- Verified end-to-end with agent-browser: starting a crawl on https://example.com with formats [markdown, html, links] now renders the markdown ("Example Domain" H1 + "Learn more" link) instead of "(no markdown)".
+
+### Bug 2: Per-page format toggle buttons (replaces collapsibles)
+- Removed the four `<details>` collapsibles (View HTML, View raw HTML, Links, Screenshot) that were nested inside each page card.
+- Added a single global `activeFormat: Format` state (`'markdown'` default).
+- For each page, computes `availableFormats` = formats the user requested AND that the page actually has content for.
+- Renders a small horizontal row of toggle buttons (one per available format) per page header; clicking sets `activeFormat` globally.
+- The body shows ONLY the active format's content for that page. Falls back to the first available format when the global active format isn't available for a given page (graceful per-page default).
+- Empty-state messages are i18n'd.
+- Failed pages now show the error inline instead of "(no markdown)".
+
+### Bug 3: Show key checkbox
+- The original code was structurally correct (`checked={show} onChange={(e) => setShow(e.target.checked)}`, `type={show ? 'text' : 'password'}`, eye button `onClick={() => setShow((s) => !s)}`) — the bug was the input had a long English placeholder that masked the actual key value and made it look like nothing was happening.
+- Reduced placeholder noise, set `autoComplete="off"` + `spellCheck={false}` so the key text actually appears cleanly when toggled.
+- Wrapped the label in a `cursor-pointer` so clicking the label text also toggles (better hit-target).
+- Added `aria-pressed={show}` to the eye icon button for screen-reader state.
+- All visible strings translated via `t()` (`btn.showKey`, `btn.hideKey`, `btn.saveKey`, `btn.clear`, `console.apiKey`, `console.authDisabled`, `console.apiKeyRequired`, `console.locked`, `misc.keyRequiredAlert`, `misc.keyStorage`, `misc.keyAuthDisabled`, `misc.keySaved`).
+- Verified via agent-browser: clicking the checkbox toggles `<input type>` between `password` and `text`. Clicking the eye icon also toggles. Verified both directions (check → text, uncheck → password).
+
+### Bug 4: Custom SearXNG instances UI
+- New API route `src/app/api/engines/route.ts` (GET) — reads `CRAWLER_SEARXNG_INSTANCES` env var (server-side only, same format as the crawler-service: `"Name|https://url,Name2|https://url2"`), parses each entry into `{ name, baseUrl }`, and returns `{ engines: ['bing','duckduckgo','searxng','wikipedia'], customSearxng: [...] }`.
+- `src/components/test/search-tab.tsx` now fetches `/api/engines` on mount, stores `customSearxng`, and renders each custom instance as an additional selectable toggle button (Server icon + display name) below the 4 default engine buttons.
+- The button `title` attr shows the custom instance's base URL on hover.
+- When a custom instance is selected, its identifier (`searxng:${name}`) is added to the `engines` array sent to `/v2/search`. The backend reads the same env var via `getSearxngInstances()` so the custom instances are actually queried (selected or not) whenever the `searxng` engine is enabled; the per-instance checkbox is forward-compatible UI for when the backend supports per-instance selection.
+- A small "(custom) — N" hint shows below the engine row when custom instances are configured.
+- Updated `.env.local` to include `CRAWLER_SEARXNG_INSTANCES=My Searx|https://searx.example.com,Public|https://searx.be` for demo purposes.
+- Verified via agent-browser: "My Searx" and "Public" buttons appear in the Search tab; clicking toggles `aria-pressed`; POST /v2/search returns 200 with results.
+
+### Bug 5: i18n — full Chinese translation coverage
+- Rewrote `src/components/i18n.tsx` with ~120 new translation keys (both en + zh) covering:
+  - Tab names: scrape / batchSync / crawl / map / search / batchAsync
+  - Buttons: scrape / scrapeAll / startCrawl / startBatch / mapLinks / search / cancel / reset / saveKey / clear / options / hide / copy / copyAll / copyBaseUrl / showKey / hideKey / exportJson / exportMd / exportHtml
+  - Labels: url / urls / urlsOnePerLine / seedUrl / query / searchQuery / formats / maxDepth / limit / includes / excludes / includesGlob / excludesGlob / includeTags / excludeTags / includeTagsHint / excludeTagsHint / timeoutMs / waitForMs / maxRetries / engines / language / scrapeResults / scrapeResultsHint / onlyMainContent / onlyMainContentHint / includeSubdomains / includeSubdomainsHint / searchSubstring / discoveredLinks / markdown / html / rawHtml / links / screenshot / metadata / raw
+  - Status: idle / loading / requestInFlight / success / failed / crawlFinished / crawlInProgress / batchFinished / batchInProgress / foundNResults / pollingEvery2s / strategyBadge / attemptsBadge / source / scrapingBatch / scrapingBatchHint
+  - Empty states: noMarkdown / noMarkdownHint / noHtml / noHtmlHint / noLinks / noLinksHint / noScreenshot / noScreenshotHint / noMetadata / noCrawlStarted(+Hint) / noBatchStarted(+Hint) / noLinksYet(+Hint) / noResultsYet(+Hint) / noResultsYetBatch(+Hint) / noMarkdownShorthand / noContent / noDataReturned
+  - Misc: tipSyncBatch / tipAsyncBatch / keyStorage / keyAuthDisabled / keySaved / keyRequiredAlert / resolvedLanguage / Nurls / Nlinks / Ncompleted / Npercent / engineFailed / errorPrefix / copied / copyFailed / exportedJson / exportedMarkdown / exportedHtml / baseUrlCopied / failedToCopy / viewHtml / viewRawHtml / linksCount / httpN / Nms / idLabel / statusLabel / resultsN / queryPlaceholder / urlPlaceholder / searxngCustomLabel
+- Placeholder strings use `{N}` / `{M}` / `{X}` and a small `fmt()` helper substitutes them (kept in each tab file).
+- Added a `fmt()` helper to crawl-tab, scrape-tab, batch-sync-tab, batch-async-tab, map-tab, search-tab, and shared.tsx so badges/toasts interpolate correctly in both languages.
+- Updated `src/components/test/test-console.tsx`, `api-key-bar.tsx`, `scrape-tab.tsx`, `crawl-tab.tsx`, `batch-sync-tab.tsx`, `batch-async-tab.tsx`, `map-tab.tsx`, `search-tab.tsx`, `shared.tsx` to call `t()` for every visible string.
+- Made the docs components use `useI18n()` + `t()`:
+  - `docs/hero.tsx` → added `'use client'`, `t()` for tagline, badges, GitHub/Download, "All endpoints are relative to this URL", "Get started", "API reference", "Try the console".
+  - `docs/quick-start.tsx` → already client, replaced STEPS array with `t('quickStart.stepN.title/body')`, added `t('quickStart.subtitle')` + `t('quickStart.apiKeyInline')` / `t('quickStart.saveKeyHint')`.
+  - `docs/features.tsx` → added `'use client'`, `t()` for title/subtitle; built an `I18N_KEYS` map from each FEATURES entry's icon name → i18n key so feature titles/descriptions are pulled from the dictionary.
+  - `docs/endpoints.tsx` → `t()` for "API reference" title, "Endpoints" sticky label, parameter table headers (Name/Type/Req/Default/Description → all from endpoints.* keys), Request/Response example section labels. Card content (path, summary, description, params) stays as-is from data.ts since those reference the API.
+  - `docs/configuration.tsx` → added `'use client'`, `t()` for title/subtitle and table column headers (reused endpoints.param / endpoints.default / endpoints.description).
+  - `docs/openwebui.tsx` → `t()` for title, subtitle, "Endpoint" + "Response example" labels.
+- Verified via agent-browser: clicking the EN button toggled the whole UI to 中文 — every nav item, hero, features, quick-start, endpoints headers, configuration headers, openwebui, and the entire test console (tab names, labels, buttons, status, empty states, badges) changed to Chinese.
+
+### Verification
+- `cd /home/z/my-project && bun run lint` → clean (no errors).
+- `bunx tsc --noEmit` → no type errors.
+- `curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:3000/` → HTTP 200.
+- `curl -s http://localhost:3000/api/engines` → `{ "engines": ["bing","duckduckgo","searxng","wikipedia"], "customSearxng": [{"name":"My Searx","baseUrl":"https://searx.example.com"}, {"name":"Public","baseUrl":"https://searx.be"}] }`.
+- agent-browser verification (all passed):
+  1. Crawl with [markdown, html, links] → page renders markdown ("Example Domain" H1) instead of "(no markdown)".
+  2. Per-page format buttons render (Markdown/HTML/Links); clicking HTML swaps to `<pre><code>` with the page's html.
+  3. Show key checkbox toggles input type `password` ⇄ `text` (verified both directions via `get attr type`); eye icon button also toggles.
+  4. Switch language to 中文 → entire UI translated (nav, hero, features, endpoints, configuration, openwebui, test console).
+  5. Search tab shows custom SearXNG instances "My Searx" + "Public" as selectable buttons; clicking toggles `aria-pressed`; POST /v2/search returns 200.
+
+### Constraints
+- Only edited files under `src/components/` and `src/app/api/` (new `engines/route.ts`).
+- Did NOT touch `src/app/v1/**`, `src/app/v2/**`, `src/app/search/**`, `src/lib/crawler-proxy.ts`, or `mini-services/**`.
+- Neutral/zinc/emerald palette preserved.
+- TypeScript strict, no `any`, no test code.

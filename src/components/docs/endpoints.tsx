@@ -22,6 +22,7 @@ import { CodeBlock } from '@/components/code-block';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getEndpoints, METHOD_COLORS, type EndpointDef, type HttpMethod } from './data';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/components/i18n';
 
 function MethodBadge({ method }: { method: HttpMethod }) {
   const c = METHOD_COLORS[method];
@@ -37,6 +38,7 @@ function MethodBadge({ method }: { method: HttpMethod }) {
 }
 
 function EndpointCard({ ep }: { ep: EndpointDef }) {
+  const { t } = useI18n();
   return (
     <article
       id={ep.id}
@@ -68,17 +70,17 @@ function EndpointCard({ ep }: { ep: EndpointDef }) {
 
           <div>
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Parameters
+              {t('endpoints.param')}
             </h4>
             <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-zinc-50 dark:bg-zinc-900/40">
-                    <TableHead className="h-8 px-2 py-1.5 text-xs">Name</TableHead>
-                    <TableHead className="h-8 px-2 py-1.5 text-xs">Type</TableHead>
-                    <TableHead className="h-8 px-2 py-1.5 text-xs">Req</TableHead>
-                    <TableHead className="h-8 px-2 py-1.5 text-xs">Default</TableHead>
-                    <TableHead className="h-8 px-2 py-1.5 text-xs">Description</TableHead>
+                    <TableHead className="h-8 px-2 py-1.5 text-xs">{t('endpoints.param')}</TableHead>
+                    <TableHead className="h-8 px-2 py-1.5 text-xs">{t('endpoints.type')}</TableHead>
+                    <TableHead className="h-8 px-2 py-1.5 text-xs">{t('endpoints.required')}</TableHead>
+                    <TableHead className="h-8 px-2 py-1.5 text-xs">{t('endpoints.default')}</TableHead>
+                    <TableHead className="h-8 px-2 py-1.5 text-xs">{t('endpoints.description')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -97,7 +99,7 @@ function EndpointCard({ ep }: { ep: EndpointDef }) {
                       <TableCell className="px-2 py-1.5">
                         {p.required ? (
                           <span className="inline-flex items-center rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rose-700 dark:text-rose-300">
-                            required
+                            {t('endpoints.required')}
                           </span>
                         ) : (
                           <span className="inline-flex items-center rounded bg-zinc-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-600 dark:text-zinc-300">
@@ -126,7 +128,7 @@ function EndpointCard({ ep }: { ep: EndpointDef }) {
         <div className="space-y-3">
           <div>
             <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Request example
+              {t('endpoints.requestExample')}
             </h4>
             <CodeBlock
               code={ep.requestExample}
@@ -136,7 +138,7 @@ function EndpointCard({ ep }: { ep: EndpointDef }) {
           </div>
           <div>
             <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Response example
+              {t('endpoints.responseExample')}
             </h4>
             <CodeBlock code={ep.responseExample} language="json" />
           </div>
@@ -147,6 +149,7 @@ function EndpointCard({ ep }: { ep: EndpointDef }) {
 }
 
 export function Endpoints({ baseUrl }: { baseUrl: string }) {
+  const { t } = useI18n();
   const endpoints = React.useMemo(() => getEndpoints(baseUrl), [baseUrl]);
   const [active, setActive] = React.useState<string>(endpoints[0]?.id ?? '');
 
@@ -183,11 +186,9 @@ export function Endpoints({ baseUrl }: { baseUrl: string }) {
     <section id="endpoints" className="border-y border-zinc-200 bg-background dark:border-zinc-800">
       <div className="mx-auto max-w-5xl px-6 py-16">
         <div className="mb-8 max-w-2xl">
-          <h2 className="text-2xl font-semibold tracking-tight">API reference</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t('endpoints.title')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            All endpoints accept <code className="font-mono">Authorization: Bearer &lt;key&gt;</code> or
-            <code className="font-mono"> X-API-Key: &lt;key&gt;</code>. The SearxNG-compatible{' '}
-            <code className="font-mono">/search</code> also accepts <code className="font-mono">?key=</code>.
+            {t('endpoints.subtitle')}
           </p>
         </div>
 
@@ -213,7 +214,7 @@ export function Endpoints({ baseUrl }: { baseUrl: string }) {
           <aside className="hidden lg:block">
             <div className="sticky top-20 max-h-[calc(100vh-6rem)]">
               <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Endpoints
+                {t('endpoints.title')}
               </p>
               <ScrollArea className="h-[calc(100vh-8rem)]">
                 <nav className="flex flex-col gap-0.5 pr-3">

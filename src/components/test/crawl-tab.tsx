@@ -10,6 +10,7 @@ import { Globe, Play, Square, Loader2, CheckCircle2, Timer } from 'lucide-react'
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
 import { LoadingButton, ExportButtons, MarkdownRender, EmptyState } from './shared';
+import { useI18n } from '@/components/i18n';
 
 type Format = 'markdown' | 'html' | 'rawHtml' | 'links' | 'screenshot';
 const ALL_FORMATS: Format[] = ['markdown', 'html', 'rawHtml', 'links', 'screenshot'];
@@ -24,14 +25,20 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-interface CrawlPage {
-  url: string;
+interface CrawlPageData {
   markdown?: string;
   html?: string;
   rawHtml?: string;
   links?: Array<{ url: string; text?: string } | string>;
   screenshot?: string;
   metadata?: Record<string, unknown>;
+  strategy?: string;
+}
+interface CrawlPage {
+  url: string;
+  success: boolean;
+  error?: string;
+  data?: CrawlPageData;
 }
 interface CrawlStatus {
   success: boolean;
@@ -43,8 +50,16 @@ interface CrawlStatus {
   error?: string;
 }
 
+/** Format a string with {N} and {X} placeholders. */
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function CrawlTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [url, setUrl] = React.useState('https://example.com');
   const [maxDepth, setMaxDepth] = React.useState(2);
@@ -60,6 +75,11 @@ export function CrawlTab() {
   const [error, setError] = React.useState<string | null>(null);
   const abortRef = React.useRef<AbortController | null>(null);
   const pollRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Global "active format" per-page toggle — applies to every page in the list.
+  // Defaults to 'markdown'. The user can switch to html/rawHtml/links/screenshot
+  // for any page that has the relevant content.
+  const [activeFormat, setActiveFormat] = React.useState<Format>('markdown');
 
   const toggleFormat = (f: Format) => {
     setFormats((prev) =>
@@ -172,44 +192,49 @@ export function CrawlTab() {
       ? Math.round((status.completed / status.total) * 100)
       : 0;
 
-  // Combined MD export
+  // Combined MD export — uses the NESTED data structure (p.data?.markdown).
   const combinedMd = React.useMemo(() => {
     if (!pages.length) return undefined;
     return pages
-      .map((p) => `# ${p.url}\n\nSource: <${p.url}>\n\n${p.markdown || '(no markdown)'}`)
+      .map((p) => {
+        const md = p.data?.markdown || t('empty.noMarkdownShorthand');
+        return `# ${p.url}\n\nSource: <${p.url}>\n\n${md}`;
+      })
       .join('\n\n---\n\n');
-  }, [pages]);
+  }, [pages, t]);
 
   // Combined standalone HTML export — `<!DOCTYPE html>...<body>${html}</body>`
   // where the body is built from each page's html (if present) or markdown
-  // wrapped in a <pre> fallback.
+  // wrapped in a <pre> fallback. Now uses the NESTED data structure.
   const combinedHtml = React.useMemo(() => {
     if (!pages.length) return undefined;
     const body = pages
       .map((p) => {
-        const inner = p.html?.trim()
-          ? p.html
-          : p.markdown?.trim()
-            ? `<pre>${escapeHtml(p.markdown)}</pre>`
-            : '<p>(no content)</p>';
+        const html = p.data?.html?.trim();
+        const md = p.data?.markdown?.trim();
+        const inner = html
+          ? html
+          : md
+            ? `<pre>${escapeHtml(md)}</pre>`
+            : `<p>${escapeHtml(t('empty.noContent'))}</p>`;
         return `<h2>${escapeHtml(p.url)}</h2><div>${inner}</div>`;
       })
       .join('\n');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Crawl results</title></head><body>${body}</body></html>`;
-  }, [pages]);
+  }, [pages, t]);
 
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="crawl-url" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          Seed URL
+          {t('label.seedUrl')}
         </Label>
         <div className="relative">
           <Globe className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <Input
             id="crawl-url"
             type="url"
-            placeholder="https://example.com"
+            placeholder={t('misc.urlPlaceholder')}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             className="pl-9"
@@ -220,7 +245,7 @@ export function CrawlTab() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div>
             <Label htmlFor="crawl-depth" className="mb-1 block text-xs font-medium text-muted-foreground">
-              maxDepth (1–5)
+              {t('label.maxDepth')}
             </Label>
             <Input
               id="crawl-depth"
@@ -234,7 +259,7 @@ export function CrawlTab() {
           </div>
           <div>
             <Label htmlFor="crawl-limit" className="mb-1 block text-xs font-medium text-muted-foreground">
-              limit (1–50)
+              {t('label.limit')}
             </Label>
             <Input
               id="crawl-limit"
@@ -248,7 +273,7 @@ export function CrawlTab() {
           </div>
           <div>
             <Label htmlFor="crawl-inc" className="mb-1 block text-xs font-medium text-muted-foreground">
-              includes <span className="text-zinc-400">(comma-separated glob patterns)</span>
+              {t('label.includesGlob')}
             </Label>
             <Input
               id="crawl-inc"
@@ -261,7 +286,7 @@ export function CrawlTab() {
           </div>
           <div>
             <Label htmlFor="crawl-exc" className="mb-1 block text-xs font-medium text-muted-foreground">
-              excludes <span className="text-zinc-400">(comma-separated glob patterns)</span>
+              {t('label.excludesGlob')}
             </Label>
             <Input
               id="crawl-exc"
@@ -277,7 +302,7 @@ export function CrawlTab() {
         {/* Formats selector — mirrors the Scrape tab pattern. */}
         <div className="mt-4">
           <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-            Formats
+            {t('label.formats')}
           </Label>
           <div className="flex flex-wrap gap-2">
             {ALL_FORMATS.map((f) => {
@@ -328,18 +353,18 @@ export function CrawlTab() {
           {!jobId ? (
             <LoadingButton loading={starting} onClick={onStart} className="gap-1.5">
               <Play className="h-3.5 w-3.5" />
-              Start crawl
+              {t('btn.startCrawl')}
             </LoadingButton>
           ) : (
             <>
               {running && (
                 <Button variant="destructive" size="sm" onClick={onCancel} disabled={cancelling} className="gap-1.5">
                   {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
-                  Cancel
+                  {t('btn.cancel')}
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={onReset}>
-                Reset
+                {t('btn.reset')}
               </Button>
             </>
           )}
@@ -365,21 +390,25 @@ export function CrawlTab() {
                 <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
               )}
               <Badge variant="outline" className="font-mono">
-                status: {status.status}
+                {fmt(t('misc.statusLabel'), { X: status.status })}
               </Badge>
               <Badge variant="outline" className="font-mono">
-                {status.completed} / {status.total}
+                {fmt(t('misc.Ncompleted'), { N: status.completed, M: status.total })}
               </Badge>
               {running && (
                 <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                  <Timer className="h-3 w-3" /> polling every 2s
+                  <Timer className="h-3 w-3" /> {t('status.pollingEvery2s')}
                 </span>
               )}
             </div>
-            <code className="truncate text-[11px] text-muted-foreground">id: {jobId}</code>
+            <code className="truncate text-[11px] text-muted-foreground">
+              {fmt(t('misc.idLabel'), { X: jobId })}
+            </code>
           </div>
           <Progress value={pct} className="h-2" />
-          <div className="mt-1.5 text-right text-[11px] text-muted-foreground">{pct}%</div>
+          <div className="mt-1.5 text-right text-[11px] text-muted-foreground">
+            {fmt(t('misc.Npercent'), { N: pct })}
+          </div>
         </div>
       )}
 
@@ -388,15 +417,15 @@ export function CrawlTab() {
           {status?.status === 'completed' ? (
             <>
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              Crawl finished — {pages.length} pages scraped.
+              {fmt(t('status.crawlFinished'), { N: pages.length })}
             </>
           ) : running ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600 dark:text-amber-400" />
-              Crawling in progress…
+              {t('status.crawlInProgress')}
             </>
           ) : (
-            <>Idle</>
+            <>{t('status.idle')}</>
           )}
         </div>
         {status?.data && status.data.length > 0 && (
@@ -412,105 +441,173 @@ export function CrawlTab() {
       {/* Pages */}
       {pages.length > 0 ? (
         <div className="space-y-2">
-          {pages.map((p, i) => (
-            <details
-              key={p.url + i}
-              className="overflow-hidden rounded-lg border border-zinc-200 bg-card dark:border-zinc-800"
-            >
-              <summary className="cursor-pointer px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-900/40">
-                <span className="font-mono text-xs text-emerald-700 dark:text-emerald-300">{p.url}</span>
-                {p.metadata?.title && (
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    — {String(p.metadata.title)}
+          {pages.map((p, i) => {
+            // Which formats does this page actually have content for?
+            const data = p.data;
+            const has: Record<Format, boolean> = {
+              markdown: !!data?.markdown,
+              html: !!data?.html,
+              rawHtml: !!data?.rawHtml,
+              links: !!(data?.links && data.links.length > 0),
+              screenshot: !!data?.screenshot,
+            };
+            // Formats the user requested AND the page actually has.
+            const availableFormats = ALL_FORMATS.filter(
+              (f) => formats.includes(f) && has[f],
+            );
+            // Active format for this page = global activeFormat if available,
+            // otherwise the first available format.
+            const pageActive: Format | undefined = availableFormats.includes(activeFormat)
+              ? activeFormat
+              : availableFormats[0];
+
+            return (
+              <div
+                key={p.url + i}
+                className="overflow-hidden rounded-lg border border-zinc-200 bg-card dark:border-zinc-800"
+              >
+                {/* Page header — url + optional title from metadata */}
+                <div className="flex items-start gap-2 border-b border-zinc-200 bg-zinc-50/60 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/30">
+                  <span className="mt-0.5 font-mono text-[11px] text-zinc-400">
+                    {String(i + 1).padStart(2, '0')}
                   </span>
-                )}
-              </summary>
-              <div className="space-y-3 border-t border-zinc-200 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-900/30">
-                {/* Markdown — default visible content */}
-                {p.markdown ? (
-                  <MarkdownRender source={p.markdown} />
-                ) : formats.includes('markdown') ? (
-                  <p className="text-xs text-muted-foreground">(no markdown)</p>
-                ) : null}
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={p.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="block truncate font-mono text-xs text-emerald-700 hover:underline dark:text-emerald-300"
+                      title={p.url}
+                    >
+                      {p.url}
+                    </a>
+                    {p.data?.metadata?.title && (
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {String(p.data.metadata.title)}
+                      </span>
+                    )}
+                  </div>
+                  {p.data?.strategy && (
+                    <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                      {p.data.strategy}
+                    </Badge>
+                  )}
+                </div>
 
-                {/* HTML collapsible */}
-                {formats.includes('html') && p.html && (
-                  <details className="overflow-hidden rounded-md border border-zinc-200 bg-card dark:border-zinc-800">
-                    <summary className="cursor-pointer px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900/40">
-                      View HTML
-                    </summary>
-                    <pre className="max-h-96 overflow-auto bg-zinc-50 p-2 text-[11px] dark:bg-zinc-900/40">
-                      <code className="font-mono whitespace-pre-wrap break-all">{p.html}</code>
-                    </pre>
-                  </details>
-                )}
-
-                {/* rawHtml collapsible */}
-                {formats.includes('rawHtml') && p.rawHtml && (
-                  <details className="overflow-hidden rounded-md border border-zinc-200 bg-card dark:border-zinc-800">
-                    <summary className="cursor-pointer px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900/40">
-                      View raw HTML
-                    </summary>
-                    <pre className="max-h-96 overflow-auto bg-zinc-50 p-2 text-[11px] dark:bg-zinc-900/40">
-                      <code className="font-mono whitespace-pre-wrap break-all">{p.rawHtml}</code>
-                    </pre>
-                  </details>
-                )}
-
-                {/* Links collapsible */}
-                {formats.includes('links') && p.links && p.links.length > 0 && (
-                  <details className="overflow-hidden rounded-md border border-zinc-200 bg-card dark:border-zinc-800">
-                    <summary className="cursor-pointer px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900/40">
-                      Links ({p.links.length})
-                    </summary>
-                    <ul className="max-h-96 space-y-1 overflow-auto bg-zinc-50 p-2 dark:bg-zinc-900/40">
-                      {p.links.map((l, li) => {
-                        const linkUrl = typeof l === 'string' ? l : l.url;
-                        const linkText = typeof l === 'string' ? l : (l.text || l.url);
-                        return (
-                          <li
-                            key={`${linkUrl}-${li}`}
-                            className="flex items-baseline gap-2 rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900/40"
-                          >
-                            <span className="font-mono text-[10px] text-zinc-400">
-                              {String(li + 1).padStart(3, '0')}
-                            </span>
-                            <a
-                              href={linkUrl}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              className="truncate font-mono text-xs text-emerald-700 hover:underline dark:text-emerald-300"
-                              title={linkText}
-                            >
-                              {linkText || linkUrl}
-                            </a>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </details>
-                )}
-
-                {/* Screenshot */}
-                {formats.includes('screenshot') && p.screenshot && (
-                  <div className="overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
-                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Screenshot</p>
-                    <img
-                      src={p.screenshot}
-                      alt={`Screenshot of ${p.url}`}
-                      className="mx-auto max-w-full rounded shadow"
-                    />
+                {/* Per-page format toggle buttons */}
+                {availableFormats.length > 0 && (
+                  <div className="flex flex-wrap gap-1 border-b border-zinc-200 bg-zinc-50/40 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/20">
+                    {availableFormats.map((f) => {
+                      const on = pageActive === f;
+                      return (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setActiveFormat(f)}
+                          className={
+                            'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ' +
+                            (on
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                              : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-300 dark:hover:bg-zinc-800')
+                          }
+                          aria-pressed={on}
+                        >
+                          {t(`label.${f}`)}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
+
+                {/* Page body — only the active format's content */}
+                <div className="space-y-3 bg-zinc-50/60 p-3 dark:bg-zinc-900/30">
+                  {!data || !pageActive ? (
+                    <p className="text-xs text-muted-foreground">
+                      {t('empty.noMarkdownShorthand')}
+                    </p>
+                  ) : pageActive === 'markdown' ? (
+                    data.markdown ? (
+                      <MarkdownRender source={data.markdown} />
+                    ) : (
+                      <EmptyState
+                        title={t('empty.noMarkdown')}
+                        hint={t('empty.noMarkdownHint')}
+                      />
+                    )
+                  ) : pageActive === 'html' ? (
+                    <pre className="max-h-96 overflow-auto rounded-md border border-zinc-200 bg-zinc-50 p-2 text-[11px] dark:border-zinc-800 dark:bg-zinc-900/40">
+                      <code className="font-mono whitespace-pre-wrap break-all">{data.html}</code>
+                    </pre>
+                  ) : pageActive === 'rawHtml' ? (
+                    <pre className="max-h-96 overflow-auto rounded-md border border-zinc-200 bg-zinc-50 p-2 text-[11px] dark:border-zinc-800 dark:bg-zinc-900/40">
+                      <code className="font-mono whitespace-pre-wrap break-all">{data.rawHtml}</code>
+                    </pre>
+                  ) : pageActive === 'links' ? (
+                    data.links && data.links.length > 0 ? (
+                      <ul className="max-h-96 space-y-1 overflow-auto rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+                        {data.links.map((l, li) => {
+                          const linkUrl = typeof l === 'string' ? l : l.url;
+                          const linkText = typeof l === 'string' ? l : (l.text || l.url);
+                          return (
+                            <li
+                              key={`${linkUrl}-${li}`}
+                              className="flex items-baseline gap-2 rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900/40"
+                            >
+                              <span className="font-mono text-[10px] text-zinc-400">
+                                {String(li + 1).padStart(3, '0')}
+                              </span>
+                              <a
+                                href={linkUrl}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                className="truncate font-mono text-xs text-emerald-700 hover:underline dark:text-emerald-300"
+                                title={linkText}
+                              >
+                                {linkText || linkUrl}
+                              </a>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <EmptyState
+                        title={t('empty.noLinks')}
+                        hint={t('empty.noLinksHint')}
+                      />
+                    )
+                  ) : pageActive === 'screenshot' ? (
+                    data.screenshot ? (
+                      <div className="overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+                        <img
+                          src={data.screenshot}
+                          alt={`Screenshot of ${p.url}`}
+                          className="mx-auto max-w-full rounded shadow"
+                        />
+                      </div>
+                    ) : (
+                      <EmptyState
+                        title={t('empty.noScreenshot')}
+                        hint={t('empty.noScreenshotHint')}
+                      />
+                    )
+                  ) : null}
+
+                  {/* Error rendering for failed pages */}
+                  {p.success === false && (
+                    <p className="text-xs text-rose-700 dark:text-rose-300">
+                      {fmt(t('misc.errorPrefix'), { X: p.error || t('empty.noDataReturned') })}
+                    </p>
+                  )}
+                </div>
               </div>
-            </details>
-          ))}
+            );
+          })}
         </div>
       ) : (
         !running && (
           <EmptyState
-            title="No crawl started"
-            hint="Set a seed URL and depth, then click Start crawl."
+            title={t('empty.noCrawlStarted')}
+            hint={t('empty.noCrawlStartedHint')}
           />
         )
       )}

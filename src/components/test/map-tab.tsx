@@ -10,6 +10,7 @@ import { Globe, Play, Link2, ListTree } from 'lucide-react';
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
 import { LoadingButton, StatusBar, ExportButtons, EmptyState, CopyButton } from './shared';
+import { useI18n } from '@/components/i18n';
 
 interface MapResponse {
   success: boolean;
@@ -17,8 +18,15 @@ interface MapResponse {
   error?: string;
 }
 
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function MapTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [url, setUrl] = React.useState('https://example.com');
   const [search, setSearch] = React.useState('');
@@ -56,14 +64,14 @@ export function MapTab() {
     <div className="space-y-5">
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="map-url" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          URL
+          {t('label.url')}
         </Label>
         <div className="relative">
           <Globe className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <Input
             id="map-url"
             type="url"
-            placeholder="https://example.com"
+            placeholder={t('misc.urlPlaceholder')}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             className="pl-9"
@@ -76,7 +84,7 @@ export function MapTab() {
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div>
             <Label htmlFor="map-search" className="mb-1 block text-xs font-medium text-muted-foreground">
-              search <span className="text-zinc-400">(substring filter)</span>
+              {t('label.searchSubstring')}
             </Label>
             <Input
               id="map-search"
@@ -88,7 +96,7 @@ export function MapTab() {
           </div>
           <div>
             <Label htmlFor="map-limit" className="mb-1 block text-xs font-medium text-muted-foreground">
-              limit
+              {t('label.limitGeneric')}
             </Label>
             <Input
               id="map-limit"
@@ -100,8 +108,8 @@ export function MapTab() {
           </div>
           <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div>
-              <Label className="text-xs">includeSubdomains</Label>
-              <p className="text-[10px] text-muted-foreground">Allow subdomains of seed host.</p>
+              <Label className="text-xs">{t('label.includeSubdomains')}</Label>
+              <p className="text-[10px] text-muted-foreground">{t('label.includeSubdomainsHint')}</p>
             </div>
             <Switch checked={includeSubdomains} onCheckedChange={setIncludeSubdomains} />
           </div>
@@ -110,7 +118,7 @@ export function MapTab() {
         <div className="mt-4">
           <LoadingButton loading={loading} onClick={onRun} className="gap-1.5">
             <Play className="h-3.5 w-3.5" />
-            Map links
+            {t('btn.mapLinks')}
           </LoadingButton>
         </div>
       </div>
@@ -121,7 +129,7 @@ export function MapTab() {
           {links.length > 0 && (
             <Badge variant="outline" className="font-mono">
               <ListTree className="mr-1 h-3 w-3" />
-              {links.length} links
+              {fmt(t('misc.Nlinks'), { N: links.length })}
             </Badge>
           )}
         </div>
@@ -138,9 +146,9 @@ export function MapTab() {
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-card dark:border-zinc-800">
           <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/40">
             <span className="text-xs font-medium text-muted-foreground">
-              Discovered links
+              {t('label.discoveredLinks')}
             </span>
-            <CopyButton value={links.join('\n')} label="Copy all" />
+            <CopyButton value={links.join('\n')} label={t('btn.copyAll')} />
           </div>
           <div className="max-h-[420px] overflow-auto">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
@@ -168,7 +176,7 @@ export function MapTab() {
         </div>
       ) : (
         !loading && (
-          <EmptyState title="No links yet" hint="Enter a seed URL and click Map links." />
+          <EmptyState title={t('empty.noLinksYet')} hint={t('empty.noLinksYetHint')} />
         )
       )}
     </div>

@@ -21,10 +21,12 @@ import {
   ShieldCheck,
   AlertTriangle,
   Languages,
+  Server,
 } from 'lucide-react';
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
 import { LoadingButton, StatusBar, ExportButtons, EmptyState } from './shared';
+import { useI18n } from '@/components/i18n';
 
 type SearchLang =
   | 'auto'
@@ -40,19 +42,19 @@ type SearchLang =
   | 'ru'
   | 'it';
 
-const LANG_OPTIONS: { value: SearchLang; label: string }[] = [
-  { value: 'auto', label: 'Auto-detect (recommended)' },
-  { value: 'all', label: 'All languages (mixed)' },
-  { value: 'en', label: 'English' },
-  { value: 'zh', label: 'Chinese (中文)' },
-  { value: 'ja', label: 'Japanese (日本語)' },
-  { value: 'ko', label: 'Korean (한국어)' },
-  { value: 'fr', label: 'French (Français)' },
-  { value: 'de', label: 'German (Deutsch)' },
-  { value: 'es', label: 'Spanish (Español)' },
-  { value: 'pt', label: 'Portuguese (Português)' },
-  { value: 'ru', label: 'Russian (Русский)' },
-  { value: 'it', label: 'Italian (Italiano)' },
+const LANG_OPTIONS: { value: SearchLang; labelKey: string; label: string }[] = [
+  { value: 'auto', labelKey: 'langAuto', label: 'Auto-detect (recommended)' },
+  { value: 'all', labelKey: 'langAll', label: 'All languages (mixed)' },
+  { value: 'en', labelKey: 'langEn', label: 'English' },
+  { value: 'zh', labelKey: 'langZh', label: 'Chinese (中文)' },
+  { value: 'ja', labelKey: 'langJa', label: 'Japanese (日本語)' },
+  { value: 'ko', labelKey: 'langKo', label: 'Korean (한국어)' },
+  { value: 'fr', labelKey: 'langFr', label: 'French (Français)' },
+  { value: 'de', labelKey: 'langDe', label: 'German (Deutsch)' },
+  { value: 'es', labelKey: 'langEs', label: 'Spanish (Español)' },
+  { value: 'pt', labelKey: 'langPt', label: 'Portuguese (Português)' },
+  { value: 'ru', labelKey: 'langRu', label: 'Russian (Русский)' },
+  { value: 'it', labelKey: 'langIt', label: 'Italian (Italiano)' },
 ];
 
 const LANG_LABELS: Record<string, string> = {
@@ -102,19 +104,56 @@ const ENGINE_LABELS: Record<string, { label: string; color: string }> = {
 const ALL_ENGINES = ['bing', 'duckduckgo', 'searxng', 'wikipedia'] as const;
 type Engine = (typeof ALL_ENGINES)[number];
 
+interface CustomSearxngInstance {
+  name: string;
+  baseUrl: string;
+}
+interface EnginesApiResponse {
+  engines: string[];
+  customSearxng: CustomSearxngInstance[];
+}
+
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function SearchTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [query, setQuery] = React.useState('best rust web framework 2025');
   const [limit, setLimit] = React.useState(50);
-  const [engines, setEngines] = React.useState<Engine[]>([...ALL_ENGINES]);
+  const [engines, setEngines] = React.useState<string[]>([...ALL_ENGINES]);
+  const [customSearxng, setCustomSearxng] = React.useState<CustomSearxngInstance[]>([]);
   const [lang, setLang] = React.useState<SearchLang>('auto');
   const [scrapeResults, setScrapeResults] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<SearchResponse> | null>(null);
   const [loading, setLoading] = React.useState(false);
 
-  const toggleEngine = (e: Engine) => {
+  // Fetch available engines (including custom SearXNG instances from env).
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/engines');
+        if (!res.ok) return;
+        const json = (await res.json()) as EnginesApiResponse;
+        if (!cancelled && Array.isArray(json.customSearxng)) {
+          setCustomSearxng(json.customSearxng);
+        }
+      } catch {
+        // ignore — leave list empty
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleEngine = (e: string) => {
     setEngines((prev) =>
       prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e],
     );
@@ -159,14 +198,14 @@ export function SearchTab() {
     <div className="space-y-5">
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="search-query" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          Query
+          {t('label.searchQuery')}
         </Label>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <Input
             id="search-query"
             type="text"
-            placeholder="best rust web framework"
+            placeholder={t('misc.queryPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -179,7 +218,7 @@ export function SearchTab() {
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px_190px_auto]">
           <div>
             <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-              Engines
+              {t('label.engines')}
             </Label>
             <div className="flex flex-wrap gap-1.5">
               {ALL_ENGINES.map((e) => {
@@ -202,11 +241,39 @@ export function SearchTab() {
                   </button>
                 );
               })}
+              {/* Custom SearXNG instances from CRAWLER_SEARXNG_INSTANCES env var */}
+              {customSearxng.map((c) => {
+                const id = `searxng:${c.name}`;
+                const on = engines.includes(id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => toggleEngine(id)}
+                    title={c.baseUrl}
+                    className={
+                      'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ' +
+                      (on
+                        ? 'border-zinc-500/40 bg-zinc-500/15 text-zinc-700 dark:text-zinc-300'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400')
+                    }
+                    aria-pressed={on}
+                  >
+                    <Server className="h-3 w-3" />
+                    {c.name}
+                  </button>
+                );
+              })}
             </div>
+            {customSearxng.length > 0 && (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {t('misc.searxngCustomLabel')} — {customSearxng.length}
+              </p>
+            )}
           </div>
           <div>
             <Label htmlFor="search-limit" className="mb-1 block text-xs font-medium text-muted-foreground">
-              limit
+              {t('label.limitGeneric')}
             </Label>
             <Input
               id="search-limit"
@@ -219,11 +286,11 @@ export function SearchTab() {
           </div>
           <div>
             <Label htmlFor="search-lang" className="mb-1 block text-xs font-medium text-muted-foreground">
-              Language
+              {t('label.language')}
             </Label>
             <Select value={lang} onValueChange={(v) => setLang(v as SearchLang)}>
               <SelectTrigger id="search-lang" className="w-full">
-                <SelectValue placeholder="Language" />
+                <SelectValue placeholder={t('label.language')} />
               </SelectTrigger>
               <SelectContent>
                 {LANG_OPTIONS.map((o) => (
@@ -236,8 +303,8 @@ export function SearchTab() {
           </div>
           <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div>
-              <Label className="text-xs">scrapeResults</Label>
-              <p className="text-[10px] text-muted-foreground">Reserved for future use.</p>
+              <Label className="text-xs">{t('label.scrapeResults')}</Label>
+              <p className="text-[10px] text-muted-foreground">{t('label.scrapeResultsHint')}</p>
             </div>
             <Switch checked={scrapeResults} onCheckedChange={setScrapeResults} />
           </div>
@@ -246,7 +313,7 @@ export function SearchTab() {
         <div className="mt-4">
           <LoadingButton loading={loading} onClick={onRun} className="gap-1.5">
             <Play className="h-3.5 w-3.5" />
-            Search
+            {t('btn.search')}
           </LoadingButton>
         </div>
       </div>
@@ -266,12 +333,12 @@ export function SearchTab() {
       {result?.ok && result.data && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50/60 px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/30">
           <Globe2 className="h-3.5 w-3.5 text-zinc-500" />
-          <span className="text-muted-foreground">Engines:</span>
+          <span className="text-muted-foreground">{t('label.engines')}:</span>
           {result.data.lang && (
             <Badge
               variant="outline"
               className="gap-1 border-transparent bg-zinc-500/15 text-zinc-700 dark:text-zinc-300"
-              title={`Resolved language: ${result.data.lang}`}
+              title={fmt(t('misc.resolvedLanguage'), { X: result.data.lang })}
             >
               <Languages className="h-3 w-3" />
               {LANG_LABELS[result.data.lang] ?? result.data.lang}
@@ -302,7 +369,7 @@ export function SearchTab() {
                     className="gap-1 border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300"
                   >
                     <AlertTriangle className="h-3 w-3" />
-                    {meta.label} (failed)
+                    {fmt(t('misc.engineFailed'), { X: meta.label })}
                   </Badge>
                 );
               })}
@@ -310,7 +377,7 @@ export function SearchTab() {
           )}
           {result.data.total !== undefined && (
             <Badge variant="outline" className="ml-auto font-mono">
-              {result.data.total} results
+              {fmt(t('misc.resultsN'), { N: result.data.total })}
             </Badge>
           )}
         </div>
@@ -388,8 +455,8 @@ export function SearchTab() {
       ) : (
         !loading && (
           <EmptyState
-            title="No results yet"
-            hint="Type a query, pick engines, and click Search."
+            title={t('empty.noResultsYet')}
+            hint={t('empty.noResultsYetHint')}
           />
         )
       )}

@@ -1,3 +1,5 @@
+'use client';
+
 import * as React from 'react';
 import {
   Table,
@@ -10,8 +12,10 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Terminal } from 'lucide-react';
 import { ENV_VARS } from './data';
+import { useI18n } from '@/components/i18n';
 
 export function Configuration() {
+  const { t } = useI18n();
   return (
     <section
       id="configuration"
@@ -19,11 +23,9 @@ export function Configuration() {
     >
       <div className="mx-auto max-w-5xl px-6 py-16">
         <div className="mb-8 max-w-2xl">
-          <h2 className="text-2xl font-semibold tracking-tight">Configuration</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t('config.title')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            All environment variables read by the crawler service and the Next.js proxy.
-            Set them in <code className="font-mono">.env.local</code> (Next.js app) and
-            <code className="font-mono"> mini-services/crawler-service/.env</code>.
+            {t('config.subtitle')}
           </p>
         </div>
 
@@ -31,9 +33,9 @@ export function Configuration() {
           <Table>
             <TableHeader>
               <TableRow className="bg-zinc-50 dark:bg-zinc-900/40">
-                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">Variable</TableHead>
-                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">Default</TableHead>
-                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">Description</TableHead>
+                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">{t('endpoints.param')}</TableHead>
+                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">{t('endpoints.default')}</TableHead>
+                <TableHead className="h-9 px-3 text-xs uppercase tracking-wider">{t('endpoints.description')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

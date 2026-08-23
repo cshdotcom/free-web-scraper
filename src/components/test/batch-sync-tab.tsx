@@ -17,6 +17,7 @@ import { Settings2, Play, Globe, ListChecks, AlertCircle, CheckCircle2 } from 'l
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
 import { LoadingButton, StatusBar, ExportButtons, MarkdownRender, EmptyState } from './shared';
+import { useI18n } from '@/components/i18n';
 
 type Format = 'markdown' | 'html' | 'rawHtml' | 'links' | 'screenshot';
 const ALL_FORMATS: Format[] = ['markdown', 'html', 'rawHtml', 'links', 'screenshot'];
@@ -51,8 +52,15 @@ interface BatchResponse {
   error?: string;
 }
 
+function fmt(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, k) =>
+    k in vars ? String(vars[k]) : `{${k}}`,
+  );
+}
+
 export function BatchSyncTab() {
   const { authHeaders } = useTestConsole();
+  const { t } = useI18n();
 
   const [urls, setUrls] = React.useState(
     'https://example.com\nhttps://example.org',
@@ -110,11 +118,11 @@ export function BatchSyncTab() {
     if (!items.length) return undefined;
     return items
       .map((it) => {
-        const md = it.data?.markdown || `(no markdown for ${it.url})`;
+        const md = it.data?.markdown || fmt(t('misc.errorPrefix'), { X: it.url });
         return `# ${it.url}\n\nSource: <${it.url}>\n\n${md}`;
       })
       .join('\n\n---\n\n');
-  }, [items]);
+  }, [items, t]);
 
   // Combined standalone HTML export. For each result we embed its raw `html`
   // when available, otherwise fall back to the markdown wrapped in <pre>.
@@ -128,18 +136,20 @@ export function BatchSyncTab() {
           ? html
           : md
             ? `<pre>${escapeHtml(md)}</pre>`
-            : '<p>(no content)</p>';
+            : `<p>${escapeHtml(t('empty.noContent'))}</p>`;
         return `<h2>${escapeHtml(it.url)}</h2><div>${inner}</div>`;
       })
       .join('\n');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Batch results</title></head><body>${body}</body></html>`;
-  }, [items]);
+  }, [items, t]);
+
+  const urlCount = urls.split('\n').filter((s) => s.trim()).length;
 
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-zinc-200 bg-card p-5 shadow-sm dark:border-zinc-800">
         <Label htmlFor="batch-urls" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          URLs <span className="text-zinc-400">(one per line)</span>
+          {t('label.urlsOnePerLine')}
         </Label>
         <Textarea
           id="batch-urls"
@@ -152,7 +162,7 @@ export function BatchSyncTab() {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <LoadingButton loading={loading} onClick={onRun} className="gap-1.5">
             <Play className="h-3.5 w-3.5" />
-            Scrape all
+            {t('btn.scrapeAll')}
           </LoadingButton>
           <Button
             variant="ghost"
@@ -161,17 +171,17 @@ export function BatchSyncTab() {
             onClick={() => setAdvancedOpen((v) => !v)}
           >
             <Settings2 className="h-3.5 w-3.5" />
-            {advancedOpen ? 'Hide' : 'Options'}
+            {advancedOpen ? t('btn.hide') : t('btn.options')}
           </Button>
           <Badge variant="outline" className="font-mono">
-            {urls.split('\n').filter((s) => s.trim()).length} URLs
+            {fmt(t('misc.Nurls'), { N: urlCount })}
           </Badge>
         </div>
 
         {advancedOpen && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">Formats</Label>
+              <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">{t('label.formats')}</Label>
               <div className="flex flex-wrap gap-2">
                 {ALL_FORMATS.map((f) => {
                   const on = formats.includes(f);
@@ -208,14 +218,14 @@ export function BatchSyncTab() {
             </div>
             <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
               <div>
-                <Label className="text-xs">onlyMainContent</Label>
-                <p className="text-[10px] text-muted-foreground">Strip nav / footer noise.</p>
+                <Label className="text-xs">{t('label.onlyMainContent')}</Label>
+                <p className="text-[10px] text-muted-foreground">{t('label.onlyMainContentHint')}</p>
               </div>
               <Switch checked={onlyMainContent} onCheckedChange={setOnlyMainContent} />
             </div>
             <div>
               <Label htmlFor="bs-inc-tags" className="mb-1 block text-xs font-medium text-muted-foreground">
-                includeTags
+                {t('label.includeTags')}
               </Label>
               <Input
                 id="bs-inc-tags"
@@ -227,7 +237,7 @@ export function BatchSyncTab() {
             </div>
             <div>
               <Label htmlFor="bs-exc-tags" className="mb-1 block text-xs font-medium text-muted-foreground">
-                excludeTags
+                {t('label.excludeTags')}
               </Label>
               <Input
                 id="bs-exc-tags"
@@ -239,7 +249,7 @@ export function BatchSyncTab() {
             </div>
             <div>
               <Label htmlFor="bs-timeout" className="mb-1 block text-xs font-medium text-muted-foreground">
-                timeout (ms)
+                {t('label.timeoutMs')}
               </Label>
               <Input
                 id="bs-timeout"
@@ -250,7 +260,7 @@ export function BatchSyncTab() {
             </div>
             <div>
               <Label htmlFor="bs-retries" className="mb-1 block text-xs font-medium text-muted-foreground">
-                maxRetries
+                {t('label.maxRetries')}
               </Label>
               <Input
                 id="bs-retries"
@@ -280,7 +290,7 @@ export function BatchSyncTab() {
       {/* Results list */}
       <div>
         {loading ? (
-          <EmptyState title="Scraping batch…" hint="Concurrent requests bounded by CRAWLER_MAX_CONCURRENCY." />
+          <EmptyState title={t('status.scrapingBatch')} hint={t('status.scrapingBatchHint')} />
         ) : items.length ? (
           <Accordion type="multiple" defaultValue={[items[0]?.url ?? '']}>
             <div className="space-y-2">
@@ -314,7 +324,7 @@ export function BatchSyncTab() {
                         </div>
                       ) : (
                         <p className="text-xs text-rose-700 dark:text-rose-300">
-                          Error: {it.error || 'no data returned'}
+                          {fmt(t('misc.errorPrefix'), { X: it.error || t('empty.noDataReturned') })}
                         </p>
                       )}
                     </AccordionContent>
@@ -325,16 +335,16 @@ export function BatchSyncTab() {
           </Accordion>
         ) : (
           <EmptyState
-            title="No results yet"
-            hint="Add one URL per line above and click Scrape all."
+            title={t('empty.noResultsYetBatch')}
+            hint={t('empty.noResultsYetBatchHint')}
           />
         )}
       </div>
 
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <ListChecks className="h-3.5 w-3.5" />
-        Tip: this endpoint is synchronous — the response only returns once every URL is done. For larger batches use
-        <strong className="mx-1">Batch (Async)</strong> below.
+        {t('misc.tipSyncBatch')}
+        <strong className="mx-1">{t('tab.batchAsync')}</strong>.
       </div>
     </div>
   );

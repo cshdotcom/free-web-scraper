@@ -9,27 +9,7 @@ import {
   type QuickStartLang,
 } from './data';
 import { useTestConsole } from '@/components/test/store';
-
-const STEPS = [
-  {
-    n: 1,
-    title: 'Get an API key',
-    body:
-      'Set CRAWLER_API_KEYS in your .env.local (one or more comma-separated keys). Restart the app. Skip this if auth is disabled.',
-  },
-  {
-    n: 2,
-    title: 'Send a request',
-    body:
-      'POST /v2/scrape with your URL and the formats you want. Pass the key as Authorization: Bearer.',
-  },
-  {
-    n: 3,
-    title: 'Render the result',
-    body:
-      'Use data.markdown, data.html, data.links, or data.screenshot. Poll crawl/batch jobs every 2s until status is "completed".',
-  },
-];
+import { useI18n } from '@/components/i18n';
 
 const LANG_LABELS: Record<QuickStartLang, string> = {
   curl: 'curl',
@@ -43,8 +23,15 @@ interface QuickStartProps {
 }
 
 export function QuickStart({ baseUrl }: QuickStartProps) {
+  const { t } = useI18n();
   const [lang, setLang] = React.useState<QuickStartLang>('curl');
   const { apiKey } = useTestConsole();
+
+  const STEPS = [
+    { n: 1, title: t('quickStart.step1.title'), body: t('quickStart.step1.body') },
+    { n: 2, title: t('quickStart.step2.title'), body: t('quickStart.step2.body') },
+    { n: 3, title: t('quickStart.step3.title'), body: t('quickStart.step3.body') },
+  ];
 
   // Resolve code samples against the auto-detected baseUrl and the
   // user's saved API key (if any). Memoised so we only re-resolve when
@@ -57,12 +44,10 @@ export function QuickStart({ baseUrl }: QuickStartProps) {
   return (
     <section id="quickstart" className="mx-auto max-w-5xl scroll-mt-20 px-6 py-16">
       <div className="mb-8">
-        <h2 className="text-2xl font-semibold tracking-tight">Quick start</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{t('quickStart.title')}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Three steps. Pick a language, copy the snippet, run it.
-          {apiKey
-            ? ' Your saved API key is inlined in the snippets — copy-paste ready.'
-            : ' Save an API key in the console below to inline it automatically.'}
+          {t('quickStart.subtitle')}
+          {apiKey ? t('quickStart.apiKeyInline') : t('quickStart.saveKeyHint')}
         </p>
       </div>
 
