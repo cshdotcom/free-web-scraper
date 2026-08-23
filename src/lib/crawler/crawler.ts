@@ -240,10 +240,30 @@ async function attemptScrape(
 
     // Navigate and wait for network to be mostly idle so JS-rendered
     // content has time to populate the DOM.
-    const navResp = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: params.timeout,
-    });
+    // Note: Playwright throws ERR_HTTP_RESPONSE_CODE_FAILURE for 4xx/5xx
+    // responses by default. We catch this and still proceed with extraction
+    // so the user gets the status code + page content (error pages are
+    // still useful for debugging).
+    let navResp: Response | null = null;
+    try {
+      navResp = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: params.timeout,
+      });
+    } catch (navErr: any) {
+      // If it's a non-2xx HTTP response error, the page still loaded —
+      // extract the status code from the error and continue.
+      const msg = navErr?.message || '';
+      if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
+        // The response was received but had a non-2xx status. Try to get
+        // the status from the response listener (set above) or default to 0.
+        // The page content is still available for extraction.
+        lastError = `Navigation returned non-2xx status (page may still have content)`;
+      } else {
+        // Genuine navigation failure (DNS, connection refused, etc.)
+        throw navErr;
+      }
+    }
 
     if (navResp) {
       statusCode = statusCode || navResp.status();
