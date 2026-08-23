@@ -7,7 +7,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Play, Loader2, CheckCircle2, Timer, ListChecks } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
 import { LoadingButton, ExportButtons, MarkdownRender, EmptyState } from './shared';
@@ -26,8 +34,9 @@ function escapeHtml(s: string): string {
 interface BatchItem {
   url: string;
   success: boolean;
-  data?: { markdown?: string; html?: string; metadata?: Record<string, unknown> };
+  data?: { markdown?: string; html?: string; metadata?: Record<string, unknown>; statusCode?: number };
   error?: string;
+  statusCode?: number;
 }
 interface BatchStatus {
   success: boolean;
@@ -54,6 +63,7 @@ export function BatchAsyncTab() {
   );
   const [timeout, setTimeout_] = React.useState(45000);
   const [maxRetries, setMaxRetries] = React.useState(2);
+  const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<BatchStatus | null>(null);
@@ -115,7 +125,14 @@ export function BatchAsyncTab() {
       {
         method: 'POST',
         path: '/v2/batch/scrape',
-        body: { urls: list, formats: ['markdown'], onlyMainContent: true, timeout, maxRetries },
+        body: {
+          urls: list,
+          formats: ['markdown'],
+          onlyMainContent: true,
+          timeout,
+          maxRetries,
+          device,
+        },
       },
       authHeaders(),
     );
@@ -208,6 +225,25 @@ export function BatchAsyncTab() {
               onChange={(e) => setMaxRetries(Number(e.target.value) || 0)}
               disabled={!!jobId}
             />
+          </div>
+          <div>
+            <Label htmlFor="ba-device" className="mb-1 block text-xs font-medium text-muted-foreground">
+              {t('btn.device')}
+            </Label>
+            <Select
+              value={device}
+              onValueChange={(v) => setDevice(v as 'auto' | 'desktop' | 'mobile')}
+              disabled={!!jobId}
+            >
+              <SelectTrigger id="ba-device" className="h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">{t('device.auto')}</SelectItem>
+                <SelectItem value="desktop">{t('device.desktop')}</SelectItem>
+                <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -306,6 +342,29 @@ export function BatchAsyncTab() {
                     — {String(it.data.metadata.title)}
                   </span>
                 )}
+                {(() => {
+                  const sc =
+                    it.data?.statusCode ??
+                    it.statusCode ??
+                    (typeof it.data?.metadata?.statusCode === 'number'
+                      ? (it.data!.metadata!.statusCode as number)
+                      : undefined);
+                  if (sc === undefined) return null;
+                  const tone =
+                    sc >= 200 && sc < 300
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : sc >= 400 && sc < 600
+                        ? 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                        : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300';
+                  return (
+                    <Badge
+                      variant="outline"
+                      className={cn('ml-2 font-mono text-[10px]', tone)}
+                    >
+                      {fmt(t('result.pageStatus'), { N: sc })}
+                    </Badge>
+                  );
+                })()}
               </summary>
               <div className="border-t border-zinc-200 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-900/30">
                 {it.success && it.data?.markdown ? (

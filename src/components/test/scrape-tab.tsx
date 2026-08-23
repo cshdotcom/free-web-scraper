@@ -13,8 +13,16 @@ import {
   TableCell,
   TableRow,
 } from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Globe, Settings2, ImageIcon, List, FileText, Code, Hash, Play } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi, prettyJson, type ApiResult } from './api-client';
 import {
@@ -48,6 +56,7 @@ interface ScrapeData {
   screenshot?: string;
   metadata?: Record<string, unknown>;
   strategy?: string;
+  statusCode?: number;
 }
 interface ScrapeResponse {
   success: boolean;
@@ -74,6 +83,7 @@ export function ScrapeTab() {
   const [timeout, setTimeout_] = React.useState(45000);
   const [waitFor, setWaitFor] = React.useState(0);
   const [maxRetries, setMaxRetries] = React.useState(2);
+  const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<ScrapeResponse> | null>(null);
@@ -97,6 +107,7 @@ export function ScrapeTab() {
       timeout,
       waitFor,
       maxRetries,
+      device,
     };
     const inc = includeTags
       .split(',')
@@ -133,6 +144,13 @@ export function ScrapeTab() {
   const data: ScrapeData | undefined = result?.ok ? result.data?.data : undefined;
   const attempts = result?.ok ? result.data?.attempts : undefined;
   const strategy = data?.strategy;
+  // Page HTTP status: top-level data.statusCode takes precedence; otherwise
+  // fall back to data.metadata.statusCode for older responses.
+  const pageStatusCode: number | undefined = (() => {
+    if (data?.statusCode !== undefined) return data.statusCode;
+    const meta = data?.metadata?.statusCode;
+    return typeof meta === 'number' ? meta : undefined;
+  })();
 
   // Build a standalone HTML document for the "Export HTML" button.
   // - body = data.html (raw, already HTML) OR markdown wrapped in <pre> (escaped)
@@ -324,6 +342,21 @@ export function ScrapeTab() {
                   onChange={(e) => setMaxRetries(Number(e.target.value) || 0)}
                 />
               </div>
+              <div>
+                <Label htmlFor="scrape-device" className="mb-1 block text-xs font-medium text-muted-foreground">
+                  {t('btn.device')}
+                </Label>
+                <Select value={device} onValueChange={(v) => setDevice(v as 'auto' | 'desktop' | 'mobile')}>
+                  <SelectTrigger id="scrape-device" className="h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">{t('device.auto')}</SelectItem>
+                    <SelectItem value="desktop">{t('device.desktop')}</SelectItem>
+                    <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </motion.div>
         )}
@@ -335,11 +368,28 @@ export function ScrapeTab() {
           result={result}
           loading={loading}
           badges={
-            strategy ? (
-              <Badge variant="outline" className="font-mono">
-                {fmt(t('status.strategyBadge'), { X: strategy })}
-              </Badge>
-            ) : null
+            <>
+              {pageStatusCode !== undefined && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'font-mono',
+                    pageStatusCode >= 200 && pageStatusCode < 300
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : pageStatusCode >= 400 && pageStatusCode < 600
+                        ? 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                        : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300',
+                  )}
+                >
+                  {fmt(t('result.pageStatus'), { N: pageStatusCode })}
+                </Badge>
+              )}
+              {strategy ? (
+                <Badge variant="outline" className="font-mono">
+                  {fmt(t('status.strategyBadge'), { X: strategy })}
+                </Badge>
+              ) : null}
+            </>
           }
         />
         {result?.ok && result.data && (

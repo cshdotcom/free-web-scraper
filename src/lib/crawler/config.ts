@@ -64,6 +64,104 @@ export interface CrawlerConfig {
 export const DEFAULT_BRAND_NAME = 'NodeByte Crawl';
 
 /**
+ * Repository URL appended to every user agent as an identifier.
+ * e.g. "NodeByte Crawl/3.2 (+https://github.com/cshdotcom/free-web-scraper)"
+ * Configurable via CRAWLER_UA_REPO_URL env var.
+ */
+export const DEFAULT_REPO_URL = 'https://github.com/cshdotcom/free-web-scraper';
+
+/** A pool of realistic DESKTOP user agents to rotate through. */
+const DESKTOP_UA_POOL = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15',
+];
+
+/** A pool of realistic MOBILE user agents. */
+const MOBILE_UA_POOL = [
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (Linux; Android 15; SM-S928U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 14; SM-A546U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (iPad; CPU OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
+];
+
+/** Desktop viewport presets. */
+const DESKTOP_VIEWPORTS = [
+  { width: 1920, height: 1080 },
+  { width: 1440, height: 900 },
+  { width: 1280, height: 800 },
+];
+
+/** Mobile viewport presets. */
+const MOBILE_VIEWPORTS = [
+  { width: 390, height: 844 },   // iPhone 15
+  { width: 412, height: 915 },   // Android
+  { width: 414, height: 896 },   // iPhone Pro Max
+  { width: 768, height: 1024 },  // iPad
+];
+
+export type DeviceType = 'auto' | 'desktop' | 'mobile';
+
+export interface DeviceProfile {
+  userAgent: string;
+  viewport: { width: number; height: number };
+  isMobile: boolean;
+  hasTouch: boolean;
+}
+
+/**
+ * Pick a device profile for the given device type.
+ * - 'auto': 50/50 chance desktop vs mobile
+ * - 'desktop': random desktop UA + viewport
+ * - 'mobile': random mobile UA + viewport
+ *
+ * The UA always includes the repo URL suffix so sites can identify
+ * the crawler: "NodeByte Crawl/3.2 (+repo_url)".
+ */
+export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
+  const repoUrl = process.env.CRAWLER_UA_REPO_URL || DEFAULT_REPO_URL;
+  const brand = process.env.CRAWLER_BRAND_NAME || DEFAULT_BRAND_NAME;
+  const version = '3.2';
+  const suffix = ` (+${repoUrl})`;
+
+  let pool: string[];
+  let viewports: typeof DESKTOP_VIEWPORTS;
+  let isMobile: boolean;
+
+  const useMobile = device === 'mobile' || (device === 'auto' && Math.random() < 0.5);
+
+  if (useMobile) {
+    pool = MOBILE_UA_POOL;
+    viewports = MOBILE_VIEWPORTS;
+    isMobile = true;
+  } else {
+    pool = DESKTOP_UA_POOL;
+    viewports = DESKTOP_VIEWPORTS;
+    isMobile = false;
+  }
+
+  const ua = pool[Math.floor(Math.random() * pool.length)];
+  const vp = viewports[Math.floor(Math.random() * viewports.length)];
+
+  // Prepend the brand identifier so site admins can identify this crawler
+  // in their logs. Format: "NodeByte Crawl/3.2 (+repo_url) Mozilla/5.0 ..."
+  // We prepend (not append) so it doesn't break browser-detection regexes
+  // that expect the UA to start with "Mozilla/5.0".
+  // Actually, better: we add it as a parenthetical comment at the END,
+  // which is the standard place for bot identifiers (like "compatible; botname/1.0").
+  const brandedUa = `${ua} ${brand}/${version}${suffix}`;
+
+  return {
+    userAgent: brandedUa,
+    viewport: vp,
+    isMobile,
+    hasTouch: isMobile,
+  };
+}
+
+/**
  * Parse accepted API keys from the environment.
  *
  *  - If `CRAWLER_API_KEYS` is set (comma-separated), use it.

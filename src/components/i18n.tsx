@@ -110,6 +110,11 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'btn.exportJson': 'JSON',
     'btn.exportMd': 'MD',
     'btn.exportHtml': 'HTML',
+    'btn.device': 'Device',
+    'device.auto': 'Auto (random)',
+    'device.desktop': 'Desktop',
+    'device.mobile': 'Mobile',
+    'result.pageStatus': 'Page: {N}',
 
     // Common labels
     'label.url': 'URL',
@@ -321,6 +326,11 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'btn.exportJson': 'JSON',
     'btn.exportMd': 'MD',
     'btn.exportHtml': 'HTML',
+    'btn.device': '设备',
+    'device.auto': '随机',
+    'device.desktop': '桌面',
+    'device.mobile': '手机',
+    'result.pageStatus': '页面：{N}',
 
     'label.url': 'URL',
     'label.urls': 'URL 列表',

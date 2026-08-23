@@ -578,3 +578,66 @@ Task: Fix crawl data parsing, complete i18n, custom SearXNG UI, Show key button
 - Did NOT touch `src/app/v1/**`, `src/app/v2/**`, `src/app/search/**`, `src/lib/crawler-proxy.ts`, or `mini-services/**`.
 - Neutral/zinc/emerald palette preserved.
 - TypeScript strict, no `any`, no test code.
+
+---
+Task ID: FIX-6
+Agent: full-stack-developer (device-emulation-ui)
+Task: Add device selector, display statusCode, update docs
+
+### Changes
+1. **i18n (`src/components/i18n.tsx`)** — Added 5 new keys in both EN and ZH:
+   - `btn.device` ("Device" / "设备")
+   - `device.auto` ("Auto (random)" / "随机")
+   - `device.desktop` ("Desktop" / "桌面")
+   - `device.mobile` ("Mobile" / "手机")
+   - `result.pageStatus` ("Page: {N}" / "页面：{N}") — formatted with `fmt()` helper.
+
+2. **Scrape tab (`src/components/test/scrape-tab.tsx`)**:
+   - Imported `Select` from shadcn/ui and `cn` from `@/lib/utils`.
+   - Added `device` state (`'auto' | 'desktop' | 'mobile'`, default `'auto'`).
+   - Added `statusCode?: number` to the `ScrapeData` interface.
+   - Added `device` field to the POST `/v2/scrape` body.
+   - Added a `Select` dropdown (Auto / Desktop / Mobile) inside the Advanced options panel, next to maxRetries.
+   - Resolved page status code as `data.statusCode ?? data.metadata.statusCode` and rendered a `Page: NNN` badge in the StatusBar before the strategy badge. Badge tone: emerald for 2xx, rose for 4xx/5xx, zinc for everything else.
+
+3. **Crawl tab (`src/components/test/crawl-tab.tsx`)**:
+   - Imported `Select` + `cn`.
+   - Added `statusCode?: number` to `CrawlPageData`.
+   - Added `device` state (default `'auto'`).
+   - Added `device` to the `scrapeOptions` object sent with the POST `/v2/crawl` body.
+   - Added a `Select` dropdown as a 5th grid item next to maxDepth/limit/includes/excludes (disabled while a job is running).
+   - For each page header, computed page status code from `data.statusCode ?? data.metadata.statusCode` and rendered a tone-aware `Page: NNN` badge before the strategy badge.
+
+4. **Batch Sync tab (`src/components/test/batch-sync-tab.tsx`)**:
+   - Imported `Select` + `cn`.
+   - Added `statusCode?: number` to both `BatchItemData` and `BatchItem` (top-level fallback).
+   - Added `device` state (default `'auto'`) and a `Select` dropdown in the Advanced options panel (next to maxRetries).
+   - Added `device` to the POST `/v2/scrape/batch` body.
+   - In the Accordion trigger header, computed page status code from `it.data?.statusCode ?? it.statusCode ?? it.data.metadata.statusCode` and rendered a tone-aware `Page: NNN` badge.
+
+5. **Batch Async tab (`src/components/test/batch-async-tab.tsx`)**:
+   - Imported `Select` + `cn`.
+   - Extended `BatchItem.data` type to include `statusCode?: number` and added top-level `statusCode?: number` on `BatchItem`.
+   - Added `device` state (default `'auto'`) and a `Select` dropdown (disabled while a job is running) as a 3rd grid item next to timeout/maxRetries.
+   - Added `device` to the POST `/v2/batch/scrape` body.
+   - In the `<summary>` for each item, computed page status code with the same fallback chain and rendered a tone-aware `Page: NNN` badge after the title.
+
+6. **Docs (`src/components/docs/data.ts`)**:
+   - Added `device` parameter row to `/v2/scrape` params table:
+     `{ name: "device", type: "string", required: false, default: "auto", description: "Device emulation: 'auto' (random desktop/mobile), 'desktop', or 'mobile'. Picks matching UA + viewport." }`.
+   - Added `"device": "auto"` to the `/v2/scrape` request example.
+   - Added `"statusCode": 200` at the top level of `data` in the `/v2/scrape` response example (alongside the existing `data.metadata.statusCode`).
+   - Updated the `/v2/crawl` `scrapeOptions` parameter description to mention `device` as one of the options (and added `device: "auto"` to its default value).
+
+### Verification
+- `cd /home/z/my-project && bun run lint` → clean (no errors).
+- `bunx tsc --noEmit` → only pre-existing errors in `dist/nodebyte-crawl/app/skills/**` (unrelated to this task; all `src/**` files clean).
+- `curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:3000/` → HTTP 200.
+- Dev log shows clean recompiles after edits.
+
+### Constraints
+- Only edited files under `src/components/` (i18n.tsx, docs/data.ts, test/scrape-tab.tsx, test/crawl-tab.tsx, test/batch-sync-tab.tsx, test/batch-async-tab.tsx).
+- No `src/app/api/` edits required — backend already supports `device` + `statusCode` per the task brief.
+- Neutral/zinc/emerald palette preserved (with rose accent for 4xx/5xx page codes, matching the existing StatusBar failure color).
+- TypeScript strict, no `any`, no test code.
+- shadcn/ui `Select` component reused (no custom dropdown built).

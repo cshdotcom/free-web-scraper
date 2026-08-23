@@ -93,6 +93,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         default: '2',
         description: 'Retries on 403/429/503/network errors (exponential backoff).',
       },
+      {
+        name: 'device',
+        type: 'string',
+        required: false,
+        default: 'auto',
+        description: "Device emulation: 'auto' (random desktop/mobile), 'desktop', or 'mobile'. Picks matching UA + viewport.",
+      },
     ],
     requestExample: JSON.stringify(
       {
@@ -101,6 +108,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         onlyMainContent: true,
         timeout: 45000,
         maxRetries: 2,
+        device: 'auto',
       },
       null,
       2,
@@ -118,6 +126,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
             url: 'https://example.com',
             statusCode: 200,
           },
+          statusCode: 200,
           strategy: 'readability',
         },
         attempts: 1,
@@ -306,8 +315,8 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         name: 'scrapeOptions',
         type: 'object',
         required: false,
-        default: '{ formats: ["markdown"], onlyMainContent: true }',
-        description: 'Same fields as /v2/scrape. Key options: formats (array of "markdown"|"html"|"rawHtml"|"links"|"screenshot"), onlyMainContent (bool), includeTags, excludeTags, timeout, waitFor, maxRetries.',
+        default: '{ formats: ["markdown"], onlyMainContent: true, device: "auto" }',
+        description: 'Same fields as /v2/scrape. Key options: formats (array of "markdown"|"html"|"rawHtml"|"links"|"screenshot"), onlyMainContent (bool), includeTags, excludeTags, timeout, waitFor, maxRetries, device ("auto"|"desktop"|"mobile").',
       },
     ],
     requestExample: JSON.stringify(

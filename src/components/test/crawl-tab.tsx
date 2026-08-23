@@ -6,7 +6,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Globe, Play, Square, Loader2, CheckCircle2, Timer } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
 import { LoadingButton, ExportButtons, MarkdownRender, EmptyState } from './shared';
@@ -33,6 +41,7 @@ interface CrawlPageData {
   screenshot?: string;
   metadata?: Record<string, unknown>;
   strategy?: string;
+  statusCode?: number;
 }
 interface CrawlPage {
   url: string;
@@ -67,6 +76,7 @@ export function CrawlTab() {
   const [includes, setIncludes] = React.useState('');
   const [excludes, setExcludes] = React.useState('*/login/*,*/admin/*');
   const [formats, setFormats] = React.useState<Format[]>(['markdown']);
+  const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<CrawlStatus | null>(null);
@@ -144,7 +154,7 @@ export function CrawlTab() {
       url: url.trim(),
       maxDepth,
       limit,
-      scrapeOptions: { formats: selectedFormats, onlyMainContent: true },
+      scrapeOptions: { formats: selectedFormats, onlyMainContent: true, device },
     };
     const inc = includes.split(',').map((s) => s.trim()).filter(Boolean);
     const exc = excludes.split(',').map((s) => s.trim()).filter(Boolean);
@@ -296,6 +306,25 @@ export function CrawlTab() {
               className="font-mono text-xs"
               disabled={!!jobId}
             />
+          </div>
+          <div>
+            <Label htmlFor="crawl-device" className="mb-1 block text-xs font-medium text-muted-foreground">
+              {t('btn.device')}
+            </Label>
+            <Select
+              value={device}
+              onValueChange={(v) => setDevice(v as 'auto' | 'desktop' | 'mobile')}
+              disabled={!!jobId}
+            >
+              <SelectTrigger id="crawl-device" className="h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">{t('device.auto')}</SelectItem>
+                <SelectItem value="desktop">{t('device.desktop')}</SelectItem>
+                <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -487,6 +516,28 @@ export function CrawlTab() {
                       </span>
                     )}
                   </div>
+                  {(() => {
+                    const sc =
+                      p.data?.statusCode ??
+                      (typeof p.data?.metadata?.statusCode === 'number'
+                        ? (p.data!.metadata!.statusCode as number)
+                        : undefined);
+                    if (sc === undefined) return null;
+                    const tone =
+                      sc >= 200 && sc < 300
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : sc >= 400 && sc < 600
+                          ? 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                          : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300';
+                    return (
+                      <Badge
+                        variant="outline"
+                        className={cn('shrink-0 font-mono text-[10px]', tone)}
+                      >
+                        {fmt(t('result.pageStatus'), { N: sc })}
+                      </Badge>
+                    );
+                  })()}
                   {p.data?.strategy && (
                     <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
                       {p.data.strategy}

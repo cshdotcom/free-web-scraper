@@ -8,12 +8,20 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
 import { Settings2, Play, Globe, ListChecks, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
 import { LoadingButton, StatusBar, ExportButtons, MarkdownRender, EmptyState } from './shared';
@@ -39,12 +47,14 @@ interface BatchItemData {
   links?: string[];
   screenshot?: string;
   metadata?: Record<string, unknown>;
+  statusCode?: number;
 }
 interface BatchItem {
   url: string;
   success: boolean;
   data?: BatchItemData;
   error?: string;
+  statusCode?: number;
 }
 interface BatchResponse {
   success: boolean;
@@ -71,6 +81,7 @@ export function BatchSyncTab() {
   const [excludeTags, setExcludeTags] = React.useState('');
   const [timeout, setTimeout_] = React.useState(45000);
   const [maxRetries, setMaxRetries] = React.useState(2);
+  const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<BatchResponse> | null>(null);
@@ -97,6 +108,7 @@ export function BatchSyncTab() {
       onlyMainContent,
       timeout,
       maxRetries,
+      device,
     };
     const inc = includeTags.split(',').map((s) => s.trim()).filter(Boolean);
     const exc = excludeTags.split(',').map((s) => s.trim()).filter(Boolean);
@@ -271,6 +283,24 @@ export function BatchSyncTab() {
                 onChange={(e) => setMaxRetries(Number(e.target.value) || 0)}
               />
             </div>
+            <div>
+              <Label htmlFor="bs-device" className="mb-1 block text-xs font-medium text-muted-foreground">
+                {t('btn.device')}
+              </Label>
+              <Select
+                value={device}
+                onValueChange={(v) => setDevice(v as 'auto' | 'desktop' | 'mobile')}
+              >
+                <SelectTrigger id="bs-device" className="h-9 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">{t('device.auto')}</SelectItem>
+                  <SelectItem value="desktop">{t('device.desktop')}</SelectItem>
+                  <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         )}
       </div>
@@ -301,13 +331,13 @@ export function BatchSyncTab() {
                 >
                   <AccordionItem value={it.url || `item-${i}`} className="border-b-0">
                     <AccordionTrigger className="px-3 py-2 hover:no-underline">
-                      <div className="flex items-center gap-2 pr-2 text-left">
+                      <div className="flex flex-1 items-center gap-2 pr-2 text-left">
                         {it.success ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                         ) : (
-                          <AlertCircle className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+                          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
                         )}
-                        <span className="font-mono text-xs text-zinc-700 dark:text-zinc-200">
+                        <span className="truncate font-mono text-xs text-zinc-700 dark:text-zinc-200">
                           {it.url}
                         </span>
                         {it.data?.metadata?.title && (
@@ -315,6 +345,29 @@ export function BatchSyncTab() {
                             — {String(it.data.metadata.title)}
                           </span>
                         )}
+                        {(() => {
+                          const sc =
+                            it.data?.statusCode ??
+                            it.statusCode ??
+                            (typeof it.data?.metadata?.statusCode === 'number'
+                              ? (it.data!.metadata!.statusCode as number)
+                              : undefined);
+                          if (sc === undefined) return null;
+                          const tone =
+                            sc >= 200 && sc < 300
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                              : sc >= 400 && sc < 600
+                                ? 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                                : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300';
+                          return (
+                            <Badge
+                              variant="outline"
+                              className={cn('shrink-0 font-mono text-[10px]', tone)}
+                            >
+                              {fmt(t('result.pageStatus'), { N: sc })}
+                            </Badge>
+                          );
+                        })()}
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="px-3 pb-3 pt-0">

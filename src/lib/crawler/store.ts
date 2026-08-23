@@ -170,7 +170,7 @@ export function startCrawlJob(
         const r = await scrapeUrl({
           ...(opts.scrapeOpts as any),
           url,
-          formats: Array.from(new Set([...(opts.scrapeOpts.formats as string[] || []), 'links'])),
+          formats: Array.from(new Set([...(opts.scrapeOpts.formats as string[] || ['markdown']), 'links'])),
         });
         entry.data[idx] = { url, success: r.success, data: r.data, error: r.error };
 

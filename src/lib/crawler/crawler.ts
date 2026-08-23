@@ -1,5 +1,5 @@
 import { type Browser, type Page, type Response } from 'playwright';
-import { getBrowser, config, pickUserAgent } from './config';
+import { getBrowser, config, pickDeviceProfile, type DeviceType } from './config';
 import { extractInPage, fallbackExtract, type ExtractResult, type PageMetadata } from './extractor';
 import { htmlToMarkdown } from './markdown';
 import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep } from './stealth';
@@ -20,7 +20,7 @@ export interface ScrapeOptions {
   waitFor?: number;
   /** Remove base64 inline images from markdown */
   removeBase64Images?: boolean;
-  /** Custom user agent override */
+  /** Custom user agent override (takes precedence over device) */
   userAgent?: string;
   /** Block specific Playwright resource types (e.g. ['image','font']) */
   blockResources?: string[] | null;
@@ -28,6 +28,10 @@ export interface ScrapeOptions {
   maxRetries?: number;
   /** Wait for a specific CSS selector to appear (useful for SPAs) */
   waitForSelector?: string;
+  /** Device emulation: 'auto' (50/50 desktop/mobile), 'desktop', or 'mobile'.
+   *  When set, picks a matching UA + viewport + touch from the device pool.
+   *  Ignored if `userAgent` is explicitly provided. Default 'auto'. */
+  device?: DeviceType;
 }
 
 export interface ScrapeData {
@@ -39,6 +43,8 @@ export interface ScrapeData {
   metadata: PageMetadata;
   /** Which extraction strategy was used */
   strategy?: string;
+  /** HTTP status code of the page response (200, 404, 403, etc.) */
+  statusCode?: number;
 }
 
 export interface ScrapeResult {
@@ -103,13 +109,23 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   let lastError: string | null = null;
   let attempts = 0;
 
-  // Retry loop: rotate user agents + backoff on retryable failures.
+  // Retry loop: rotate device profiles (UA + viewport) + backoff on retryable failures.
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     attempts = attempt + 1;
-    const userAgent = opts.userAgent || pickUserAgent();
+    // If user provided a custom UA, use it. Otherwise pick a device profile
+    // (UA + viewport + touch) based on the `device` option.
+    const device = opts.device ?? 'auto';
+    const profile = opts.userAgent
+      ? { userAgent: opts.userAgent, viewport: { width: config.viewportWidth, height: config.viewportHeight }, isMobile: false, hasTouch: false }
+      : pickDeviceProfile(device);
     const result = await attemptScrape(browser, url, {
       formats, onlyMainContent, includeTags, excludeTags,
-      timeout, waitFor, removeBase64Images, userAgent, blockResources,
+      timeout, waitFor, removeBase64Images,
+      userAgent: profile.userAgent,
+      viewport: profile.viewport,
+      isMobile: profile.isMobile,
+      hasTouch: profile.hasTouch,
+      blockResources,
       waitForSelector: opts.waitForSelector,
     });
 
@@ -147,6 +163,9 @@ interface AttemptParams {
   waitFor: number;
   removeBase64Images: boolean;
   userAgent: string;
+  viewport: { width: number; height: number };
+  isMobile: boolean;
+  hasTouch: boolean;
   blockResources: string[] | null;
   waitForSelector?: string;
 }
@@ -166,7 +185,9 @@ async function attemptScrape(
   try {
     page = await browser.newPage({
       userAgent: params.userAgent,
-      viewport: { width: config.viewportWidth, height: config.viewportHeight },
+      viewport: params.viewport,
+      isMobile: params.isMobile,
+      hasTouch: params.hasTouch,
       locale: 'en-US',
       timezoneId: 'UTC',
       javaScriptEnabled: true,
@@ -354,7 +375,7 @@ async function attemptScrape(
     }
 
     // Build the response based on requested formats.
-    const data: ScrapeData = { metadata: extracted.metadata, strategy: extracted.strategy };
+    const data: ScrapeData = { metadata: extracted.metadata, strategy: extracted.strategy, statusCode: statusCode || extracted.metadata.statusCode };
 
     if (params.formats.includes('markdown')) {
       data.markdown = htmlToMarkdown(extracted.contentHtml, { removeBase64Images: params.removeBase64Images });

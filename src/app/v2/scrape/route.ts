@@ -28,6 +28,8 @@ export async function POST(request: NextRequest) {
     removeBase64Images: body.removeBase64Images,
     maxRetries: body.maxRetries,
     waitForSelector: body.waitForSelector,
+    device: body.device,
+    userAgent: body.userAgent,
   });
   return jsonResponse(result, result.success ? 200 : 422);
 }
