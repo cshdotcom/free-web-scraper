@@ -181,12 +181,14 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
           {
             url: 'https://example.com',
             success: true,
-            data: { markdown: '# Example Domain\n\n...', metadata: { title: 'Example Domain' } },
+            statusCode: 200,
+            data: { markdown: '# Example Domain\n\n...', metadata: { title: 'Example Domain', statusCode: 200 }, statusCode: 200 },
           },
           {
             url: 'https://example.org',
             success: true,
-            data: { markdown: '# Example\n\n...', metadata: { title: 'Example' } },
+            statusCode: 200,
+            data: { markdown: '# Example\n\n...', metadata: { title: 'Example', statusCode: 200 }, statusCode: 200 },
           },
         ],
       },
@@ -263,7 +265,8 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
           {
             url: 'https://example.com',
             success: true,
-            data: { markdown: '# Example Domain\n\n...', metadata: { title: 'Example Domain' } },
+            statusCode: 200,
+            data: { markdown: '# Example Domain\n\n...', metadata: { title: 'Example Domain', statusCode: 200 }, statusCode: 200 },
           },
         ],
         expiresAt: '2025-01-01T12:30:00.000Z',
@@ -362,8 +365,14 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         data: [
           {
             url: 'https://example.com',
-            markdown: '# Example Domain\n\n...',
-            metadata: { title: 'Example Domain' },
+            success: true,
+            statusCode: 200,
+            data: {
+              markdown: '# Example Domain\n\n...',
+              metadata: { title: 'Example Domain', statusCode: 200 },
+              statusCode: 200,
+              strategy: 'explicit-selector',
+            },
           },
         ],
         expiresAt: '2025-01-01T12:30:00.000Z',
