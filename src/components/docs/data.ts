@@ -306,8 +306,8 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         name: 'scrapeOptions',
         type: 'object',
         required: false,
-        default: '{}',
-        description: 'Same fields as /v2/scrape (formats, onlyMainContent, etc.).',
+        default: '{ formats: ["markdown"], onlyMainContent: true }',
+        description: 'Same fields as /v2/scrape. Key options: formats (array of "markdown"|"html"|"rawHtml"|"links"|"screenshot"), onlyMainContent (bool), includeTags, excludeTags, timeout, waitFor, maxRetries.',
       },
     ],
     requestExample: JSON.stringify(
