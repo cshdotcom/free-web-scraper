@@ -67,9 +67,11 @@ export function startBatchJob(
     let cancelled = false;
     entry.cancel = () => { cancelled = true; };
 
-    // Process URLs sequentially with a small concurrency window so the
-    // browser pool doesn't get overwhelmed. We use chunked parallelism.
-    const concurrency = Math.min(2, config.maxConcurrency);
+    // Background jobs use a SEPARATE, smaller concurrency limit so they
+    // don't starve foreground (sync /v2/scrape) requests. Each job still
+    // gets a fully isolated BrowserContext — no cookie leakage between
+    // concurrent jobs or individual pages within a job.
+    const concurrency = Math.min(config.backgroundConcurrency, config.maxConcurrency);
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       while (cursor < urls.length && !cancelled) {

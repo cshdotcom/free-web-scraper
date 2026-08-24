@@ -32,80 +32,38 @@ elif [ -d "${HOME}/.cache/ms-playwright" ]; then
   cp -r "${HOME}/.cache/ms-playwright/ffmpeg-1011" "${PKG}/browsers/" 2>/dev/null
 fi
 
-echo "[build] Writing start.sh + install-deps.sh..."
-cp "${ROOT}/install-deps.sh" "${PKG}/install-deps.sh"
-chmod +x "${PKG}/install-deps.sh"
+echo "[build] Writing start.sh..."
+cp "${ROOT}/install-deps.sh" "${PKG}/install-deps.sh" 2>/dev/null || true
+chmod +x "${PKG}/install-deps.sh" 2>/dev/null || true
 
 cat > "${PKG}/start.sh" << 'LAUNCHER'
 #!/bin/bash
-# ============================================================
-# NodeByte Crawl v3.5 — single-port launcher
-# Loads .env automatically, installs system deps if needed.
-# ============================================================
-set -e
+# NodeByte Crawl — launcher
+# Usage: bash start.sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ---- 1. Load .env file ----
-if [ ! -f "${DIR}/.env" ]; then
-  if [ -f "${DIR}/.env.example" ]; then
-    cp "${DIR}/.env.example" "${DIR}/.env"
-    echo "[start] Created .env from .env.example — edit it to configure."
-  elif [ -f "${DIR}/app/.env.example" ]; then
-    cp "${DIR}/app/.env.example" "${DIR}/.env"
-    echo "[start] Created .env from app/.env.example — edit it to configure."
-  fi
-fi
+# Copy .env.example → .env on first run
+[ ! -f "$DIR/.env" ] && [ -f "$DIR/.env.example" ] && cp "$DIR/.env.example" "$DIR/.env"
 
-if [ -f "${DIR}/.env" ]; then
-  set -a
-  . "${DIR}/.env"
-  set +a
-  echo "[start] Loaded .env"
-fi
+# Set browser path (so Playwright finds bundled Chromium)
+export PLAYWRIGHT_BROWSERS_PATH="$DIR/browsers"
 
-# ---- 2. Defaults (env vars from .env take precedence) ----
-: "${PORT:=3000}"
-: "${NODE_ENV:=production}"
-: "${PLAYWRIGHT_BROWSERS_PATH:="${DIR}/browsers"}"
-export PORT NODE_ENV PLAYWRIGHT_BROWSERS_PATH
-
-# ---- 3. Find browser binary ----
-BROWSER_BIN=""
-for candidate in \
-  "${PLAYWRIGHT_BROWSERS_PATH}/chromium-1200/chrome-linux64/chrome" \
-  "${PLAYWRIGHT_BROWSERS_PATH}/chromium-1200/chrome-linux/chrome" \
-  "${PLAYWRIGHT_BROWSERS_PATH}/chromium-1228/chrome-linux64/chrome" \
-  "${PLAYWRIGHT_BROWSERS_PATH}/chromium-1228/chrome-linux/chrome"; do
-  if [ -x "$candidate" ]; then BROWSER_BIN="$candidate"; break; fi
-done
-if [ -n "$BROWSER_BIN" ]; then
-  export CRAWLER_BROWSER_PATH="$BROWSER_BIN"
-  echo "[start] Browser: $BROWSER_BIN"
+# Start. Node 20+ --env-file properly parses .env (handles spaces, quotes).
+cd "$DIR/app"
+if node --version 2>/dev/null | grep -qE '^v(2[0-9]|[3-9][0-9])'; then
+  node --env-file="$DIR/.env" server.js
 else
-  echo "[start] WARNING: No bundled browser found. Run: npx playwright install chromium"
+  # Older Node: source .env manually (quote values to handle spaces)
+  if [ -f "$DIR/.env" ]; then
+    while IFS='=' read -r key val; do
+      case "$key" in
+        ''|\#*) continue ;;
+      esac
+      export "$key=$val"
+    done < "$DIR/.env"
+  fi
+  node server.js
 fi
-
-# ---- 4. Check system libraries ----
-NEEDED_LIBS="libatk-1.0.so.0 libcups.so.2 libxkbcommon.so.0 libgbm.so.1 libnss3.so"
-MISSING=""
-for lib in $NEEDED_LIBS; do
-  if ! ldconfig -p 2>/dev/null | grep -q "$lib"; then MISSING="$MISSING $lib"; fi
-done
-if [ -n "$MISSING" ]; then
-  echo "[start] Missing system libraries: $MISSING"
-  echo "[start] Run: bash ${DIR}/install-deps.sh"
-  echo "[start] Attempting auto-install..."
-  bash "${DIR}/install-deps.sh" 2>/dev/null || echo "[start] Auto-install failed. Run install-deps.sh manually (may need sudo)."
-fi
-
-# ---- 5. Start ----
-echo ""
-echo "[start] NodeByte Crawl v3.5 — port ${PORT}"
-echo "[start]   Docs + API: http://localhost:${PORT}"
-echo ""
-
-cd "${DIR}/app"
-exec node server.js
 LAUNCHER
 chmod +x "${PKG}/start.sh"
 

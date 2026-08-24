@@ -17,8 +17,11 @@ export interface CrawlerConfig {
   port: number;
   /** Playwright browser executable path (if using a custom build) */
   browserExecutablePath: string | undefined;
-  /** Max concurrency for in-flight page renders */
+  /** Max concurrency for FOREGROUND (sync /v2/scrape) requests */
   maxConcurrency: number;
+  /** Max concurrency for BACKGROUND (async batch/crawl) jobs.
+   * Lower than maxConcurrency to reserve resources for foreground. */
+  backgroundConcurrency: number;
   /** Default navigation timeout in ms */
   defaultTimeout: number;
   /** Default max crawl pages per crawl job */
@@ -270,6 +273,7 @@ function findChromiumBinary(browsersDir: string): string | undefined {
 function readEnv(): CrawlerConfig {
   const port = parseInt(process.env.CRAWLER_PORT ?? '3004', 10);
   const maxConcurrency = parseInt(process.env.CRAWLER_MAX_CONCURRENCY ?? '4', 10);
+  const backgroundConcurrency = parseInt(process.env.CRAWLER_BACKGROUND_CONCURRENCY ?? '2', 10);
   const defaultTimeout = parseInt(process.env.CRAWLER_TIMEOUT ?? '45000', 10);
   const defaultCrawlLimit = parseInt(process.env.CRAWLER_CRAWL_LIMIT ?? '20', 10);
   const defaultCrawlMaxDepth = parseInt(process.env.CRAWLER_CRAWL_MAX_DEPTH ?? '2', 10);
@@ -301,6 +305,7 @@ function readEnv(): CrawlerConfig {
     port,
     browserExecutablePath: bundledBrowsersPath,
     maxConcurrency,
+    backgroundConcurrency,
     defaultTimeout,
     defaultCrawlLimit,
     defaultCrawlMaxDepth,
