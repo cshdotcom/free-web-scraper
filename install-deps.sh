@@ -35,7 +35,7 @@ if command -v apt-get >/dev/null 2>&1; then
   try_install libnspr4
   try_install libdrm2
   try_install libxshmfence1
-  apt-get install -y fonts-liberation 2>/dev/null || true
+  apt-get install -y fonts-liberation fonts-noto-cjk fonts-noto-color-emoji 2>/dev/null || true
 
   echo "[install-deps] Done (apt-get)."
 
@@ -43,12 +43,14 @@ elif command -v yum >/dev/null 2>&1; then
   yum install -y atk at-spi2-atk cups-libs libxkbcommon at-spi2-core \
     libXcomposite libXdamage libXfixes libXrandr mesa-libgbm \
     pango cairo alsa-lib nss nspr libdrm libXScrnSaver liberation-fonts 2>/dev/null || true
+    google-noto-sans-cjk-fonts google-noto-color-emoji-fonts
   echo "[install-deps] Done (yum)."
 
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y atk at-spi2-atk cups-libs libxkbcommon at-spi2-core \
     libXcomposite libXdamage libXfixes libXrandr mesa-libgbm \
     pango cairo alsa-lib nss nspr libdrm libXScrnSaver liberation-fonts 2>/dev/null || true
+    google-noto-sans-cjk-fonts google-noto-color-emoji-fonts
   echo "[install-deps] Done (dnf)."
 
 elif command -v apk >/dev/null 2>&1; then

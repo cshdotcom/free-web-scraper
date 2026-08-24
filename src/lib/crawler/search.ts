@@ -264,22 +264,51 @@ interface RawResult {
 // Engine: Bing (scrape bing.com/search — works reliably)
 // ============================================================
 async function searchViaBing(query: string, lang: string): Promise<RawResult[]> {
-  // Build locale params. Default "all" = no locale restriction (mixed
-  // results from any region). Specific lang → restrict to that region.
+  // Build locale params.
   let localeParams = '';
   if (lang !== 'all') {
     const mapped = BING_LANG_MAP[lang.toLowerCase()];
     if (mapped) {
       localeParams = `&setlang=${mapped.setlang}&cc=${mapped.cc}&mkt=${mapped.mkt}`;
     } else {
-      // Unknown lang code — try it as-is.
       localeParams = `&setlang=${lang}&cc=${lang.toUpperCase()}&mkt=${lang}-${lang.toUpperCase()}`;
     }
   }
-  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20${localeParams}`;
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&safe=medium${localeParams}`;
+
+  // Try direct fetch first (fast, no Playwright — Bing returns server-rendered HTML).
+  const directHtml = await directFetchHtml(url);
+  if (directHtml) {
+    const parsed = parseBing(directHtml);
+    if (parsed.length > 0) return parsed;
+  }
+
+  // Fall back to Playwright (slower, but handles anti-bot better).
   const r = await fetchRawHtml(url, 'bing');
   if (!r) return [];
   return parseBing(r.html);
+}
+
+/** Direct server-side fetch — much faster than Playwright for search pages. */
+async function directFetchHtml(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Upgrade-Insecure-Requests': '1',
+      },
+      signal: AbortSignal.timeout(15000),
+      redirect: 'follow',
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    return html && html.length > 500 ? html : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseBing(html: string): RawResult[] {
