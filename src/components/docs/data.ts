@@ -100,6 +100,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         default: 'auto',
         description: "Device emulation: 'auto' (random desktop/mobile), 'desktop', or 'mobile'. Picks matching UA + viewport.",
       },
+      {
+        name: 'cookies',
+        type: 'string | CookieInput[]',
+        required: false,
+        default: '—',
+        description: 'Cookies to inject before navigation. Accepts a string "name=value; name2=value2" or an array [{name,value,domain?,path?,httpOnly?,secure?,sameSite?}]. Each request gets a FRESH browser context — cookies are ONLY used for this request and discarded immediately. Not persisted.',
+      },
     ],
     requestExample: JSON.stringify(
       {
@@ -109,6 +116,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         timeout: 45000,
         maxRetries: 2,
         device: 'auto',
+        cookies: 'session=abc123; token=xyz789',
       },
       null,
       2,
@@ -319,7 +327,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'object',
         required: false,
         default: '{ formats: ["markdown"], onlyMainContent: true, device: "auto" }',
-        description: 'Same fields as /v2/scrape. Key options: formats (array of "markdown"|"html"|"rawHtml"|"links"|"screenshot"), onlyMainContent (bool), includeTags, excludeTags, timeout, waitFor, maxRetries, device ("auto"|"desktop"|"mobile").',
+        description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, cookies (string or array, isolated per request), includeTags, excludeTags, timeout, waitFor, maxRetries.',
       },
     ],
     requestExample: JSON.stringify(

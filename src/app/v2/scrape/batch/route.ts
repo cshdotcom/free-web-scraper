@@ -23,7 +23,8 @@ export async function POST(request: NextRequest) {
   if (urls.length > 50) {
     return jsonResponse({ success: false, error: 'Too many URLs (max 50 for sync batch)' }, 400);
   }
-  const { urls: _u, ...scrapeOpts } = body;
+  const { urls: _u, cookies, ...scrapeOpts } = body;
+  if (cookies) scrapeOpts.cookies = cookies;
   const results = await mapWithConcurrency(urls, 4, (url: string) =>
     scrapeUrl({ ...scrapeOpts, url })
   );

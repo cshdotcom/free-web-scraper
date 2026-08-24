@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
     maxRetries: body.maxRetries,
     waitForSelector: body.waitForSelector,
     device: body.device,
+    cookies: body.cookies,
     userAgent: body.userAgent,
   });
   return jsonResponse(result, result.success ? 200 : 422);

@@ -1,4 +1,4 @@
-import { type Browser, type Page, type Response } from 'playwright';
+import { type Browser, type BrowserContext, type Page, type Response } from 'playwright';
 import { getBrowser, config, pickDeviceProfile, type DeviceType } from './config';
 import { extractInPage, fallbackExtract, type ExtractResult, type PageMetadata } from './extractor';
 import { htmlToMarkdown } from './markdown';
@@ -32,6 +32,48 @@ export interface ScrapeOptions {
    *  When set, picks a matching UA + viewport + touch from the device pool.
    *  Ignored if `userAgent` is explicitly provided. Default 'auto'. */
   device?: DeviceType;
+  /** Cookies to inject before navigation. Each scrape gets a FRESH
+   *  browser context — cookies are ONLY used for this request and
+   *  discarded immediately after. Not persisted anywhere.
+   *  Accepts: array of {name, value, domain?, path?, ...} OR
+   *  a cookie string "name=value; name2=value2" (parsed automatically). */
+  cookies?: CookieInput[] | string;
+}
+
+export interface CookieInput {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+}
+
+/** Parse a cookie string ("name=value; name2=value2") into CookieInput[].
+ * If already an array, returns it as-is (but auto-fills domain if missing).
+ * Derives domain from the target URL. */
+function parseCookies(cookies: CookieInput[] | string | undefined, targetUrl: string): CookieInput[] {
+  if (!cookies) return [];
+  let domain: string;
+  try { domain = '.' + new URL(targetUrl).hostname; } catch { domain = ''; }
+  if (Array.isArray(cookies)) {
+    // Auto-fill domain if missing (Playwright requires it)
+    return cookies.map(c => ({
+      ...c,
+      domain: c.domain || domain,
+      path: c.path || '/',
+    }));
+  }
+  // Parse cookie string: "name=value; name2=value2"
+  return cookies.split(';').map(pair => {
+    const idx = pair.indexOf('=');
+    if (idx < 0) return null;
+    const name = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (!name) return null;
+    return { name, value, domain, path: '/' };
+  }).filter(Boolean) as CookieInput[];
 }
 
 export interface ScrapeData {
@@ -127,6 +169,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       hasTouch: profile.hasTouch,
       blockResources,
       waitForSelector: opts.waitForSelector,
+      cookies: parseCookies(opts.cookies, opts.url),
     });
 
     if (result.success) {
@@ -168,6 +211,7 @@ interface AttemptParams {
   hasTouch: boolean;
   blockResources: string[] | null;
   waitForSelector?: string;
+  cookies: CookieInput[];
 }
 
 /**
@@ -179,11 +223,15 @@ async function attemptScrape(
   params: AttemptParams,
 ): Promise<ScrapeResult> {
   let page: Page | null = null;
+  let context: BrowserContext | null = null;
   let statusCode = 0;
   let lastError: string | null = null;
 
   try {
-    page = await browser.newPage({
+    // Create a FRESH browser context for each request.
+    // This ensures complete cookie isolation — cookies from one request
+    // never leak to another. After context.close(), all cookies are gone.
+    context = await browser.newContext({
       userAgent: params.userAgent,
       viewport: params.viewport,
       isMobile: params.isMobile,
@@ -205,6 +253,23 @@ async function attemptScrape(
         'Sec-Fetch-User': '?1',
       },
     });
+
+    page = await context.newPage();
+
+    // Inject cookies BEFORE navigation (if provided).
+    // Cookies are set on the isolated context — they only exist for
+    // this single request and are discarded when context.close() runs.
+    if (params.cookies && params.cookies.length > 0) {
+      await context.addCookies(params.cookies.map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain || undefined,
+        path: c.path || '/',
+        httpOnly: c.httpOnly ?? false,
+        secure: c.secure ?? false,
+        sameSite: c.sameSite || 'Lax',
+      })));
+    }
 
     // Inject stealth patches BEFORE any page JS runs.
     await applyStealth(page);
@@ -436,11 +501,12 @@ async function attemptScrape(
     };
   } finally {
     if (page) {
-      try {
-        await page.close();
-      } catch {
-        // ignore
-      }
+      try { await page.close(); } catch { /* ignore */ }
+    }
+    // Close the isolated context — this DESTROYS all cookies, localStorage,
+    // sessionStorage, etc. Nothing persists between requests.
+    if (context) {
+      try { await context.close(); } catch { /* ignore */ }
     }
   }
 }
