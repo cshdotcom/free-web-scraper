@@ -18,3 +18,4 @@ agent-ctx/
 rebuild.sh
 tsconfig.tsbuildinfo
 bun.lock
+db/

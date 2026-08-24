@@ -32,9 +32,11 @@ elif [ -d "${HOME}/.cache/ms-playwright" ]; then
   cp -r "${HOME}/.cache/ms-playwright/ffmpeg-1011" "${PKG}/browsers/" 2>/dev/null
 fi
 
-echo "[build] Writing start.sh..."
+echo "[build] Writing start.sh + SQL + install-deps..."
 cp "${ROOT}/install-deps.sh" "${PKG}/install-deps.sh" 2>/dev/null || true
 chmod +x "${PKG}/install-deps.sh" 2>/dev/null || true
+cp "${ROOT}/prisma/nodebyte-crawl.sql" "${PKG}/nodebyte-crawl.sql" 2>/dev/null || true
+cp "${ROOT}/prisma/schema.prisma" "${PKG}/prisma-schema.prisma" 2>/dev/null || true
 
 cat > "${PKG}/start.sh" << 'LAUNCHER'
 #!/bin/bash
