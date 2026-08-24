@@ -1,0 +1,27 @@
+// NodeByte Crawl — Prisma Schema
+// SQLite database for persistent job storage (survives restarts)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Async crawl/batch jobs. Stored in DB so they survive server restarts.
+model Job {
+  id        String   @id
+  type      String   // 'crawl' | 'batch'
+  status    String   // 'scraping' | 'completed' | 'failed'
+  total     Int      @default(0)
+  completed Int      @default(0)
+  data      String   // JSON: [{url, success, data, error}]
+  error     String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@index([status])
+}
