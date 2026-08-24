@@ -673,7 +673,7 @@ export type QuickStartLang = 'curl' | 'python' | 'javascript' | 'typescript';
 export const QUICK_START_LANGS: QuickStartLang[] = ['curl', 'python', 'javascript', 'typescript'];
 
 export const QUICK_START_TEMPLATES: Record<QuickStartLang, string> = {
-  curl: `# Source & docs: https://github.com/cshdotcom/free-web-scraper
+  curl: `# NodeByte Crawl — https://nodebyte.cn
 curl -X POST {BASE_URL}/v2/scrape \\
   -H "Authorization: Bearer {API_KEY}" \\
   -H "Content-Type: application/json" \\

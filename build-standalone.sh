@@ -17,21 +17,28 @@ mkdir -p "${PKG}/app"
 cp -r "${ROOT}/.next/standalone/." "${PKG}/app/"
 cp -r "${ROOT}/.next/static" "${PKG}/app/.next/" 2>/dev/null
 cp -r "${ROOT}/public" "${PKG}/app/" 2>/dev/null || true
+# Put .env.example in BOTH the app dir and the package root
 cp "${ROOT}/.env.example" "${PKG}/app/.env.example" 2>/dev/null || true
+cp "${ROOT}/.env.example" "${PKG}/.env.example" 2>/dev/null || true
 
 echo "[build] Copying bundled browser..."
 mkdir -p "${PKG}/browsers"
+# Try mini-services first, then system cache
 if [ -d "${ROOT}/mini-services/crawler-service/browsers" ]; then
   cp -r "${ROOT}/mini-services/crawler-service/browsers/." "${PKG}/browsers/"
+elif [ -d "${HOME}/.cache/ms-playwright" ]; then
+  cp -r "${HOME}/.cache/ms-playwright/chromium-1200" "${PKG}/browsers/" 2>/dev/null
+  cp -r "${HOME}/.cache/ms-playwright/chromium_headless_shell-1200" "${PKG}/browsers/" 2>/dev/null
+  cp -r "${HOME}/.cache/ms-playwright/ffmpeg-1011" "${PKG}/browsers/" 2>/dev/null
 fi
 
 echo "[build] Writing start.sh..."
 cat > "${PKG}/start.sh" << 'LAUNCHER'
 #!/bin/bash
-# NodeByte Crawl v3.0 — single-port launcher
+# NodeByte Crawl v3.4 — single-port launcher
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-echo "[start] NodeByte Crawl v3.0 — single port :${PORT:-3000}"
+echo "[start] NodeByte Crawl v3.4 — single port :${PORT:-3000}"
 cd "${DIR}/app"
 export NODE_ENV=production
 export PORT="${PORT:-3000}"

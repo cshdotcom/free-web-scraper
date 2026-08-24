@@ -64,11 +64,13 @@ export interface CrawlerConfig {
 export const DEFAULT_BRAND_NAME = 'NodeByte Crawl';
 
 /**
- * Repository URL appended to every user agent as an identifier.
- * e.g. "NodeByte Crawl/3.2 (+https://github.com/cshdotcom/free-web-scraper)"
- * Configurable via CRAWLER_UA_REPO_URL env var.
+ * Website URL appended to every user agent as an identifier.
+ * e.g. "NodeByte Crawl/3.4 (+https://nodebyte.cn)"
+ * This is a WEBSITE URL (not a repo URL) so site admins can identify the
+ * crawler and visit the site to learn more / contact the operator.
+ * Configurable via CRAWLER_UA_SITE_URL env var.
  */
-export const DEFAULT_REPO_URL = 'https://github.com/cshdotcom/free-web-scraper';
+export const DEFAULT_SITE_URL = 'https://nodebyte.cn';
 
 /** A pool of realistic DESKTOP user agents to rotate through. */
 const DESKTOP_UA_POOL = [
@@ -117,14 +119,14 @@ export interface DeviceProfile {
  * - 'desktop': random desktop UA + viewport
  * - 'mobile': random mobile UA + viewport
  *
- * The UA always includes the repo URL suffix so sites can identify
- * the crawler: "NodeByte Crawl/3.2 (+repo_url)".
+ * The UA always includes the site URL suffix so site admins can identify
+ * the crawler: "NodeByte Crawl/3.4 (+https://nodebyte.cn)".
  */
 export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
-  const repoUrl = process.env.CRAWLER_UA_REPO_URL || DEFAULT_REPO_URL;
+  const siteUrl = process.env.CRAWLER_UA_SITE_URL || DEFAULT_SITE_URL;
   const brand = process.env.CRAWLER_BRAND_NAME || DEFAULT_BRAND_NAME;
-  const version = '3.2';
-  const suffix = ` (+${repoUrl})`;
+  const version = '3.4';
+  const suffix = ` (+${siteUrl})`;
 
   let pool: string[];
   let viewports: typeof DESKTOP_VIEWPORTS;
