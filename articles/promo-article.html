@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NodeByte Crawl — 开源 Firecrawl 替代方案</title>
+<style>
+:root { --brand: #10b981; --brand-dark: #059669; --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0; --text: #1e293b; --muted: #64748b; --code-bg: #f1f5f9; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; --code-bg: #0f172a; }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+.hero { background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%); color: #fff; padding: 4rem 1rem 3rem; text-align: center; }
+.hero h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.hero p { font-size: 1.15rem; opacity: 0.9; max-width: 600px; margin: 0 auto 1.5rem; }
+.hero .badges { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
+.hero .badge { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); padding: 0.3rem 0.8rem; border-radius: 999px; font-size: 0.8rem; }
+.container { max-width: 800px; margin: 0 auto; padding: 2rem 1rem; }
+h2 { font-size: 1.4rem; margin-top: 2.5rem; margin-bottom: 0.75rem; border-bottom: 2px solid var(--brand); padding-bottom: 0.3rem; }
+h3 { font-size: 1.1rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--brand-dark); }
+blockquote { background: var(--code-bg); border-left: 4px solid var(--brand); padding: 1rem 1.5rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
+code { background: var(--code-bg); padding: 0.15rem 0.4rem; border-radius: 4px; font-family: "SF Mono", Monaco, monospace; font-size: 0.85em; }
+pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 0.75rem 0; }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; }
+th { background: var(--code-bg); font-weight: 600; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+li { margin-bottom: 0.3rem; }
+.cta { text-align: center; margin: 2rem 0; }
+.cta a { display: inline-block; background: var(--brand); color: #fff; padding: 0.8rem 2rem; border-radius: 8px; font-weight: 600; margin: 0.3rem; transition: background 0.2s; }
+.cta a:hover { background: var(--brand-dark); text-decoration: none; }
+.footer { text-align: center; margin-top: 3rem; padding: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+.card h4 { color: var(--brand); font-size: 0.95rem; margin-bottom: 0.3rem; }
+.card p { font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="hero">
+<h1>🕷️ NodeByte Crawl</h1>
+<p>开源 Firecrawl v2 兼容的网页抓取 API。一个端口、一个进程、零外部依赖。打包 Chromium，任何 Linux 服务器解压即用。</p>
+<div class="badges">
+<span class="badge">JS 渲染</span>
+<span class="badge">Firecrawl v2 兼容</span>
+<span class="badge">多引擎搜索</span>
+<span class="badge">设备仿真</span>
+<span class="badge">Cookie 注入</span>
+<span class="badge">隐身反爬</span>
+<span class="badge">OpenWebUI 兼容</span>
+<span class="badge">i18n 中英文</span>
+</div>
+</div>
+
+<div class="container">
+
+<h2>这是什么？</h2>
+<p><strong>NodeByte Crawl</strong> 是一个完全开源的网页抓取 API 服务，兼容 Firecrawl v2 接口规范，支持 OpenWebUI 搜索集成。你可以在自己的服务器上一键部署，无需依赖任何第三方云服务。</p>
+<p>简单来说：<strong>你给一个 URL，它返回干净的 Markdown。</strong> 中间的 JavaScript 渲染、正文提取、反爬绕过、多引擎搜索，全部自动处理。</p>
+
+<h2>为什么选择 NodeByte Crawl？</h2>
+
+<h3>1. 完全自部署，数据不出你的服务器</h3>
+<p>与 Firecrawl、ScrapingBee、Browserless 等云服务不同，NodeByte Crawl 运行在你自己的服务器上。抓取的内容从目标网站直接到你的应用，不经过任何中间商。</p>
+<ul>
+<li>没有按请求计费</li>
+<li>没有 API 调用配额</li>
+<li>没有数据流向第三方</li>
+<li>你的 Cookie、你的数据，你做主</li>
+</ul>
+
+<h3>2. 真正的 JavaScript 渲染</h3>
+<p>基于 Playwright 无头 Chromium 浏览器，不是简单的 HTTP 请求 + 正则提取。我们做的是：</p>
+<ul>
+<li>完整渲染 SPA（React、Vue、Angular）</li>
+<li>执行页面 JavaScript，等待动态内容加载</li>
+<li>滚动页面触发懒加载图片</li>
+<li>自动关闭 Cookie 同意弹窗</li>
+<li>截图功能（完整页面 PNG）</li>
+</ul>
+
+<h3>3. Firecrawl v2 完全兼容</h3>
+<p>API 接口与 Firecrawl v2 完全一致，你可以直接用 Firecrawl SDK，只需把 <code>baseUrl</code> 改成你的服务器地址：</p>
+<pre><code>from firecrawl import FirecrawlApp
+app = FirecrawlApp(api_key="your-key", api_url="https://your-server.com")
+result = app.scrape_url("https://example.com", params={"formats": ["markdown"]})</code></pre>
+
+<h3>4. 多引擎搜索聚合</h3>
+<p>不只是爬虫，还是一个搜索引擎。聚合 Bing + DuckDuckGo + SearXNG + Wikipedia 的结果。一个引擎失败不影响其他。自动去重、按相关性排序。自动语言检测。</p>
+
+<h3>5. 设备仿真</h3>
+<pre><code>{"url": "https://example.com", "device": "mobile"}</code></pre>
+<ul>
+<li><code>auto</code>（默认）— 50/50 随机桌面/手机</li>
+<li><code>desktop</code> — 桌面 UA + 大视口</li>
+<li><code>mobile</code> — 手机 UA + 小视口 + 触摸</li>
+</ul>
+
+<h3>6. Cookie 注入（隐私模式安全）</h3>
+<pre><code>curl -X POST https://your-server.com/v2/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/dashboard","cookies":"session=abc123; token=xyz"}'</code></pre>
+<p><strong>安全模型</strong>：每次抓取使用全新的浏览器上下文（无痕模式），Cookie 仅用于该单次请求，抓取完成后立即销毁。多次并发请求之间 Cookie 零泄漏。</p>
+
+<h3>7. 隐身反爬</h3>
+<ul>
+<li>移除 <code>navigator.webdriver</code> 标识</li>
+<li>UA 轮换（5 桌面 + 4 手机）</li>
+<li>Cookie 同意弹窗自动关闭</li>
+<li>403/429/503 指数退避重试</li>
+<li>WebGL vendor 伪装</li>
+</ul>
+
+<h3>8. 资源管理 — 双池并发</h3>
+<table>
+<tr><th>池</th><th>并发</th><th>用途</th></tr>
+<tr><td>前台</td><td>4</td><td>单页抓取（同步，快速响应）</td></tr>
+<tr><td>后台</td><td>2</td><td>批量/爬取（异步，后台处理）</td></tr>
+<tr><td><strong>总计</strong></td><td><strong>6</strong></td><td>~600MB 内存（有界，不 OOM）</td></tr>
+</table>
+
+<div class="grid">
+<div class="card"><h4>🌍 i18n</h4><p>中英文文档 + 测试控制台切换</p></div>
+<div class="card"><h4>🌙 暗色模式</h4><p>完整的暗色主题支持</p></div>
+<div class="card"><h4>🔑 多 API Key</h4><p>逗号分隔多个密钥</p></div>
+<div class="card"><h4>🔒 加密存储</h4><p>API Key AES-GCM 加密 cookie</p></div>
+<div class="card"><h4>📡 statusCode</h4><p>每次抓取返回 HTTP 状态码</p></div>
+<div class="card"><h4>🕸️ BFS 爬取</h4><p>递归深度 1-5 + include/exclude</p></div>
+</div>
+
+<h2>快速开始</h2>
+<h3>Standalone 包（推荐）</h3>
+<pre><code>wget https://github.com/cshdotcom/free-web-scraper/releases/download/v3.6.0/nodebyte-crawl-v3.6.zip
+unzip nodebyte-crawl-v3.6.zip
+cd nodebyte-crawl
+bash start.sh</code></pre>
+<p>打开 <code>http://localhost:3000</code></p>
+
+<h2>与 Firecrawl 对比</h2>
+<table>
+<tr><th>特性</th><th>Firecrawl (云)</th><th>NodeByte Crawl (自部署)</th></tr>
+<tr><td>定价</td><td>按请求计费</td><td>免费（开源）</td></tr>
+<tr><td>数据流向</td><td>经过 Firecrawl</td><td>直接在你服务器</td></tr>
+<tr><td>API 兼容</td><td>—</td><td>完全兼容 Firecrawl v2</td></tr>
+<tr><td>JS 渲染</td><td>✅</td><td>✅</td></tr>
+<tr><td>多引擎搜索</td><td>❌</td><td>✅</td></tr>
+<tr><td>设备仿真</td><td>❌</td><td>✅</td></tr>
+<tr><td>Cookie 注入</td><td>❌</td><td>✅</td></tr>
+<tr><td>OpenWebUI 兼容</td><td>❌</td><td>✅</td></tr>
+</table>
+
+<div class="cta">
+<a href="https://github.com/cshdotcom/free-web-scraper">GitHub 仓库</a>
+<a href="https://github.com/cshdotcom/free-web-scraper/releases">下载 Standalone 包</a>
+</div>
+
+</div>
+
+<div class="footer">
+<p>NodeByte Crawl · 开源网页抓取 API · MIT License · <a href="https://nodebyte.cn">https://nodebyte.cn</a></p>
+</div>
+
+</body>
+</html>
