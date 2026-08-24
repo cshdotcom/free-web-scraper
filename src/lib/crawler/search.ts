@@ -264,7 +264,6 @@ interface RawResult {
 // Engine: Bing (scrape bing.com/search — works reliably)
 // ============================================================
 async function searchViaBing(query: string, lang: string): Promise<RawResult[]> {
-  // Build locale params.
   let localeParams = '';
   if (lang !== 'all') {
     const mapped = BING_LANG_MAP[lang.toLowerCase()];
@@ -275,15 +274,7 @@ async function searchViaBing(query: string, lang: string): Promise<RawResult[]> 
     }
   }
   const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&safe=medium${localeParams}`;
-
-  // Try direct fetch first (fast, no Playwright — Bing returns server-rendered HTML).
-  const directHtml = await directFetchHtml(url);
-  if (directHtml) {
-    const parsed = parseBing(directHtml);
-    if (parsed.length > 0) return parsed;
-  }
-
-  // Fall back to Playwright (slower, but handles anti-bot better).
+  // fetchRawHtml tries direct fetch first (fast ~2s), then Playwright (anti-bot).
   const r = await fetchRawHtml(url, 'bing');
   if (!r) return [];
   return parseBing(r.html);
@@ -438,24 +429,48 @@ async function searchViaSearXNG(query: string, lang: string): Promise<RawResult[
   const instanceTasks = instances.map(async (base) => {
     try {
       const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}`;
-      const r = await scrapeUrl({
-        url: searchUrl,
-        formats: ['rawHtml'],
-        onlyMainContent: false,
-        timeout: 10000,
-        maxRetries: 0,
-      });
-      if (!r.success || !r.data?.rawHtml) return null;
-      const html = r.data.rawHtml;
-      // SearXNG with format=json returns raw JSON (possibly in a <pre>).
+      
+      // Step 1: Direct fetch (fast — SearXNG returns JSON, no JS needed)
       let data: any = null;
-      const preMatch = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
-      if (preMatch) {
-        try { data = JSON.parse(preMatch[1].replace(/<[^>]+>/g, '')); } catch { /* not JSON */ }
+      try {
+        const resp = await fetch(searchUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+          },
+          signal: AbortSignal.timeout(8000),
+          redirect: 'follow',
+        });
+        if (resp.ok) {
+          const text = await resp.text();
+          try { data = JSON.parse(text); } catch {
+            // Might be HTML-wrapped JSON
+            const preMatch = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+            if (preMatch) { try { data = JSON.parse(preMatch[1].replace(/<[^>]+>/g, '')); } catch { /* not JSON */ } }
+          }
+        }
+      } catch { /* direct fetch failed */ }
+
+      // Step 2: Playwright fallback (handles Cloudflare, JS)
+      if (!data || !Array.isArray(data.results)) {
+        const r = await scrapeUrl({
+          url: searchUrl,
+          formats: ['rawHtml'],
+          onlyMainContent: false,
+          timeout: 10000,
+          maxRetries: 0,
+        });
+        if (!r.success || !r.data?.rawHtml) return null;
+        const html = r.data.rawHtml;
+        const preMatch = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+        if (preMatch) {
+          try { data = JSON.parse(preMatch[1].replace(/<[^>]+>/g, '')); } catch { /* not JSON */ }
+        }
+        if (!data) {
+          try { data = JSON.parse(html.replace(/<[^>]+>/g, '').trim()); } catch { /* not JSON */ }
+        }
       }
-      if (!data) {
-        try { data = JSON.parse(html.replace(/<[^>]+>/g, '').trim()); } catch { /* not JSON */ }
-      }
+
       if (data && Array.isArray(data.results) && data.results.length > 0) {
         return data.results.slice(0, 15).map((r: any) => ({
           url: r.url || '',
@@ -616,7 +631,17 @@ function parseStartpage(html: string): RawResult[] {
 // ============================================================
 
 /** Fetch raw HTML via the internal scraper (Playwright + stealth). */
+/**
+ * Fetch raw HTML — tries direct fetch first (fast, ~2s), falls back to
+ * Playwright (slow, ~10s, but handles anti-bot/Cloudflare).
+ * Used by ALL search engines that need to scrape HTML pages.
+ */
 async function fetchRawHtml(url: string, engine: string): Promise<{ html: string } | null> {
+  // Step 1: Direct fetch (fast, no browser overhead)
+  const directHtml = await directFetchHtml(url);
+  if (directHtml) return { html: directHtml };
+
+  // Step 2: Playwright fallback (handles anti-bot, JS rendering)
   try {
     const r = await scrapeUrl({
       url,
