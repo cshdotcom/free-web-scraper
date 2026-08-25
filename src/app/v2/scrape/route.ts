@@ -75,7 +75,13 @@ export async function POST(request: NextRequest) {
     attributes: attributesOpts,
     ignoreRobotsTxt: body.ignoreRobotsTxt === true ? true : undefined,
   });
-  return jsonResponse(result, result.success ? 200 : 422);
+  // Firecrawl-compatible: always return 200 with success: true/false in the
+  // JSON body. OpenWebUI and other Firecrawl SDK clients treat non-200
+  // responses as HTTP errors and don't parse the body — so we return 200
+  // even on failure and let the caller check `result.success`.
+  // The only exceptions are auth (401), bad request (400), and SSRF
+  // (403) — those are genuine HTTP-level rejections.
+  return jsonResponse(result, 200);
 }
 
 export async function OPTIONS(request: NextRequest) {

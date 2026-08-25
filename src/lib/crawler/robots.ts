@@ -86,8 +86,13 @@ export interface ComplianceResult {
 function parseRobotsTxt(text: string): ParsedRobots {
   const groups: ParsedRobots['groups'] = [];
   let current: { userAgent: string; disallow: string[]; allow: string[] } | null = null;
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.replace(/#.*$/, '').trim();
+  // Normalize line endings: handle \r\n, \r, and \n.
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  for (const rawLine of lines) {
+    // Strip comments (#...) but only when # is at the start of a token
+    // (not inside a value). RFC 9309: comments start at # and extend
+    // to end of line. The # can appear after whitespace too.
+    const line = rawLine.replace(/\s+#.*$/, '').replace(/^#.*$/, '').trim();
     if (!line) continue;
     const idx = line.indexOf(':');
     if (idx < 0) continue;
@@ -105,12 +110,18 @@ function parseRobotsTxt(text: string): ParsedRobots {
         groups.push(current);
       }
     } else if (key === 'disallow' && current) {
-      if (value) current.disallow.push(value);
-      else current.disallow.push('/'); // empty Disallow => whole site
+      // RFC 9309: An empty Disallow value means "allow all" — it
+      // explicitly says nothing is disallowed. This is the correct
+      // interpretation: `Disallow:` (no path) = no restrictions.
+      // `Disallow: /` (with path "/") = block everything.
+      if (value) {
+        current.disallow.push(value);
+      }
+      // Empty value → do NOT add to disallow list (means "allow all").
     } else if (key === 'allow' && current) {
       if (value) current.allow.push(value);
     }
-    // Sitemap: lines are recorded for the sitemap discovery module.
+    // Sitemap: lines are handled by the sitemap discovery module.
   }
   return { groups };
 }

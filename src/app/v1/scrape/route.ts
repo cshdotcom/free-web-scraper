@@ -29,7 +29,9 @@ export async function POST(request: NextRequest) {
     maxRetries: body.maxRetries,
     waitForSelector: body.waitForSelector,
   });
-  return jsonResponse(result, result.success ? 200 : 422);
+  // Firecrawl-compatible: always return 200 with success: true/false in the
+  // JSON body. See /v2/scrape for rationale.
+  return jsonResponse(result, 200);
 }
 
 export async function OPTIONS(request: NextRequest) {
