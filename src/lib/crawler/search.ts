@@ -152,6 +152,19 @@ export async function searchEngines(
   if (engines.includes('searxng')) tasks.push(searchViaSearXNG(query, lang).then((r) => ({ engine: 'searxng', results: r })));
   if (engines.includes('wikipedia')) tasks.push(searchViaWikipedia(query, lang).then((r) => ({ engine: 'wikipedia', results: r })));
 
+  // Custom SearXNG instances — engine IDs of the form "searxng:DisplayName".
+  // The instance URL is looked up by name in the env-configured list.
+  const customInstances = loadCustomSearxngInstances();
+  for (const eng of engines) {
+    if (!eng.startsWith('searxng:')) continue;
+    const name = eng.slice('searxng:'.length).toLowerCase();
+    const inst = customInstances.find((c) => c.name.toLowerCase() === name);
+    if (!inst) continue;
+    tasks.push(
+      searchViaSearXNG(query, lang, inst.baseUrl).then((r) => ({ engine: `searxng:${name}`, results: r })),
+    );
+  }
+
   const settled = await Promise.allSettled(tasks);
   const usedEngines: string[] = [];
   const byUrl = new Map<string, SearchResult>();
@@ -423,9 +436,12 @@ async function searchViaDuckDuckGoApi(query: string, lang: string): Promise<RawR
 // SearXNG aggregates Google/Bing/DDG so its relevance is better than
 // any single engine.
 // ============================================================
-async function searchViaSearXNG(query: string, lang: string): Promise<RawResult[]> {
+async function searchViaSearXNG(query: string, lang: string, onlyBase?: string): Promise<RawResult[]> {
   const langParam = lang !== 'all' ? `&language=${encodeURIComponent(lang)}` : '';
-  const instances = getSearxngInstances();
+  // When `onlyBase` is provided, query ONLY that instance (used by the
+  // `searxng:Name` engine ID flow). Otherwise, query every configured
+  // instance (custom + public defaults).
+  const instances = onlyBase ? [onlyBase.replace(/\/$/, '')] : getSearxngInstances();
   const instanceTasks = instances.map(async (base) => {
     try {
       const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}`;

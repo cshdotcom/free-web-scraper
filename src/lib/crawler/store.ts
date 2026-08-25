@@ -2,7 +2,16 @@ import { config } from './config';
 import { scrapeUrl, type ScrapeData } from './crawler';
 
 /**
- * In-memory job store for asynchronous crawl/batch scrape jobs.
+ * Hybrid job store for asynchronous crawl/batch scrape jobs.
+ *
+ * Primary backend: MySQL via Prisma (`@/lib/db`). When `DATABASE_URL` is
+ * configured and points at a reachable MySQL instance, all job state is
+ * persisted there — jobs survive server restarts and are visible from
+ * any worker process.
+ *
+ * Fallback: in-memory `Map` when the database is unavailable (e.g. dev
+ * mode without a MySQL server, or prisma client not yet generated).
+ * The in-memory backend loses state on restart but is API-compatible.
  *
  * Each job has:
  *  - id (prefixed with crawl_ or batch_)
@@ -11,7 +20,7 @@ import { scrapeUrl, type ScrapeData } from './crawler';
  *  - data: array of per-URL scrape results as they finish
  *  - errors: array of { url, error } entries for failed scrapes
  *
- * Jobs auto-expire after `jobTtlMs` to bound memory usage.
+ * Jobs auto-expire after `jobTtlMs` to bound storage usage.
  */
 
 export type JobType = 'crawl' | 'batch';
@@ -31,7 +40,59 @@ export interface JobEntry {
   cancel?: () => void;
 }
 
-const jobs = new Map<string, JobEntry>();
+// ============================================================
+// Storage backend selection
+// ============================================================
+
+/**
+ * Try to import the Prisma client lazily. We don't `import` it at the
+ * top of the file because that would force every consumer of `store.ts`
+ * to also load `@prisma/client` — which fails loudly if `prisma
+ * generate` hasn't been run yet. Lazy require with a try/catch lets us
+ * gracefully fall back to the in-memory store when the DB layer isn't
+ * ready.
+ */
+let dbClient: any | null = null;
+let dbBackendAvailable = false;
+let dbCheckDone = false;
+
+async function getDb(): Promise<any | null> {
+  if (dbCheckDone) return dbBackendAvailable ? dbClient : null;
+  dbCheckDone = true;
+  // Skip when no DATABASE_URL is configured (open access / dev mode).
+  const url = process.env.DATABASE_URL || '';
+  if (!url || url.startsWith('file:')) {
+    // SQLite file URL is also acceptable — but the production schema is
+    // mysql. We treat any non-mysql URL as "not available" so the
+    // in-memory fallback kicks in.
+    if (!url.startsWith('mysql://') && !url.startsWith('mysql+')) {
+      return null;
+    }
+  }
+  try {
+    // Dynamic import so `bun install` doesn't choke if @prisma/client
+    // hasn't been generated yet.
+    const mod = await import('@/lib/db');
+    dbClient = (mod as any).db;
+    // Verify the client can actually talk to the database by running a
+    // trivial query. If this throws, fall back to in-memory.
+    await dbClient.$queryRaw`SELECT 1`;
+    dbBackendAvailable = true;
+    console.log('[store] MySQL backend connected — jobs will persist across restarts');
+    return dbClient;
+  } catch (e) {
+    console.warn(`[store] MySQL backend unavailable, falling back to in-memory store:`, (e as Error).message?.slice(0, 120));
+    dbBackendAvailable = false;
+    return null;
+  }
+}
+
+// Kick off the backend probe in the background so the first request
+// doesn't pay the full connection cost.
+void getDb();
+
+// In-memory fallback (always present, used when DB is unavailable).
+const memJobs = new Map<string, JobEntry>();
 
 /** Generate an ID like "crawl_8f3a1b2c" or "batch_8f3a1b2c". */
 function makeId(type: JobType): string {
@@ -42,6 +103,86 @@ function makeId(type: JobType): string {
 /** Public base URL used when constructing the poll URL returned to clients. */
 function publicBaseUrl(): string {
   return process.env.CRAWLER_PUBLIC_URL || `http://localhost:${config.port}`;
+}
+
+// ============================================================
+// DB <-> JobEntry marshalling
+// ============================================================
+
+function rowToEntry(row: any): JobEntry {
+  let data: JobEntry['data'] = [];
+  let errors: JobEntry['errors'] = [];
+  try {
+    if (row.data) data = JSON.parse(row.data);
+  } catch { /* keep empty */ }
+  try {
+    if (row.errors) errors = JSON.parse(row.errors);
+    else if (row.error) errors = [{ url: '(job)', error: row.error }];
+  } catch { /* keep empty */ }
+  return {
+    id: row.id,
+    type: row.type as JobType,
+    status: row.status as JobStatus,
+    total: row.total ?? 0,
+    completed: row.completed ?? 0,
+    data,
+    errors,
+    createdAt: row.createdAt ? new Date(row.createdAt).getTime() : Date.now(),
+    expiresAt: row.expiresAt ? new Date(row.expiresAt).getTime() : Date.now() + config.jobTtlMs,
+  };
+}
+
+async function readJobFromDb(id: string): Promise<JobEntry | undefined> {
+  const db = await getDb();
+  if (!db) return memJobs.get(id);
+  try {
+    const row = await db.job.findUnique({ where: { id } });
+    if (!row) return undefined;
+    const entry = rowToEntry(row);
+    if (Date.now() > entry.expiresAt) {
+      // Expired — delete and return undefined.
+      await db.job.delete({ where: { id } }).catch(() => {});
+      return undefined;
+    }
+    return entry;
+  } catch {
+    return memJobs.get(id);
+  }
+}
+
+async function writeJobToDb(entry: JobEntry): Promise<void> {
+  // Always keep the in-memory copy in sync (so cancel() works even
+  // when the DB is the primary source of truth).
+  memJobs.set(entry.id, entry);
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.job.upsert({
+      where: { id: entry.id },
+      create: {
+        id: entry.id,
+        type: entry.type,
+        status: entry.status,
+        total: entry.total,
+        completed: entry.completed,
+        data: JSON.stringify(entry.data),
+        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n') : null,
+        createdAt: new Date(entry.createdAt),
+        expiresAt: new Date(entry.expiresAt),
+      },
+      update: {
+        status: entry.status,
+        total: entry.total,
+        completed: entry.completed,
+        data: JSON.stringify(entry.data),
+        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n') : null,
+        expiresAt: new Date(entry.expiresAt),
+      },
+    });
+  } catch (e) {
+    // best-effort — in-memory copy is already updated.
+    console.warn(`[store] failed to persist job ${entry.id} to MySQL:`, (e as Error).message?.slice(0, 80));
+  }
 }
 
 /** Create a new crawl/batch job and start processing URLs in the background. */
@@ -65,7 +206,8 @@ export function startBatchJob(
     createdAt: Date.now(),
     expiresAt: Date.now() + config.jobTtlMs,
   };
-  jobs.set(id, entry);
+  memJobs.set(id, entry);
+  void writeJobToDb(entry);
 
   // Kick off the background processing. We don't await here so the
   // request can return immediately with the job ID.
@@ -98,14 +240,14 @@ export function startBatchJob(
           entry.errors.push({ url, error: (e as Error).message });
         }
         entry.completed += 1;
+        // Persist progress after each URL finishes.
+        void writeJobToDb(entry);
       }
     });
 
     await Promise.all(workers).catch(() => {});
     entry.status = cancelled ? 'failed' : 'completed';
-    if (entry.status === 'completed' && entry.data.some((d) => !d?.success) && entry.data.every((d) => d != null)) {
-      // Per-URL failures don't make the whole job fail; leave as 'completed'.
-    }
+    void writeJobToDb(entry);
   })();
 
   const pathSegment = type === 'batch' ? 'batch/scrape' : type;
@@ -115,7 +257,7 @@ export function startBatchJob(
 /**
  * Start a BFS recursive crawl job. Starting from `seedUrl`, the crawler:
  *   1. Scrapes the seed page
- *   2. Extracts all same-domain links (or subdomain links, or external links)
+ *   2. Extracts all same-domain links (or subdomain / external links)
  *   3. Scrapes each discovered link (depth +1)
  *   4. Repeats up to `maxDepth` levels, capped at `limit` total pages
  *
@@ -173,7 +315,8 @@ export function startCrawlJob(
     createdAt: Date.now(),
     expiresAt: Date.now() + config.jobTtlMs,
   };
-  jobs.set(id, entry);
+  memJobs.set(id, entry);
+  void writeJobToDb(entry);
 
   void (async () => {
     let cancelled = false;
@@ -287,6 +430,8 @@ export function startCrawlJob(
         entry.errors.push({ url, error: (e as Error).message });
       }
       entry.completed += 1;
+      // Persist progress after each URL finishes.
+      void writeJobToDb(entry);
       // Optional inter-request delay (forces polite crawling).
       if (opts.delay && opts.delay > 0) {
         await new Promise((resolve) => setTimeout(resolve, opts.delay * 1000));
@@ -296,32 +441,40 @@ export function startCrawlJob(
     // Trim data to the actual scraped count (in case we over-allocated).
     entry.total = entry.data.length;
     entry.status = cancelled ? 'failed' : 'completed';
+    void writeJobToDb(entry);
   })();
 
   return { id, url: `${publicBaseUrl()}/${version}/crawl/${id}` };
 }
 
 /** Look up a job by ID. */
-export function getJob(id: string): JobEntry | undefined {
-  const job = jobs.get(id);
-  if (!job) return undefined;
-  if (Date.now() > job.expiresAt) {
-    jobs.delete(id);
-    return undefined;
-  }
-  return job;
+export async function getJob(id: string): Promise<JobEntry | undefined> {
+  // First check the in-memory cache (always present, includes cancel handle).
+  const mem = memJobs.get(id);
+  if (mem && Date.now() <= mem.expiresAt) return mem;
+  // Fall through to the DB for jobs that started on a previous process.
+  return readJobFromDb(id);
 }
 
 /** Prune expired jobs - called periodically. */
-export function pruneExpiredJobs(): void {
+export async function pruneExpiredJobs(): Promise<void> {
   const now = Date.now();
-  for (const [id, job] of jobs) {
+  // Prune in-memory.
+  for (const [id, job] of memJobs) {
     if (now > job.expiresAt) {
       if (job.cancel) job.cancel();
-      jobs.delete(id);
+      memJobs.delete(id);
     }
+  }
+  // Prune DB rows.
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.job.deleteMany({ where: { expiresAt: { lt: new Date(now) } } });
+  } catch {
+    // best-effort
   }
 }
 
 // Run prune every minute.
-setInterval(pruneExpiredJobs, 60 * 1000).unref?.();
+setInterval(() => { void pruneExpiredJobs(); }, 60 * 1000).unref?.();

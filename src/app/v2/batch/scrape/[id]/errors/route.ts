@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const authError = checkAuth(request);
   if (authError) return jsonResponse({ success: false, error: authError }, 401);
   const { id } = await params;
-  const job = getJob(id);
+  const job = await getJob(id);
   if (!job || job.type !== 'batch') {
     return jsonResponse({ success: false, error: 'Batch job not found' }, 404);
   }
