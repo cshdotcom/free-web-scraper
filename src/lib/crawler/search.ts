@@ -48,6 +48,11 @@ export interface SearchOpts {
   /** Source type: 'web' (default) | 'news' | 'images'. When set, we
    * route to the appropriate engine pool and tag results with `source`. */
   source?: 'web' | 'news' | 'images';
+  /** Google-style time filter: "qdr:d" (past day), "qdr:w" (past week),
+   *  "qdr:m" (past month), "qdr:y" (past year), "sbd:1" (sort by date).
+   *  Passed as a URL param to Bing (which supports it natively) and
+   *  to SearXNG (via time_range). Other engines ignore it. */
+  tbs?: string;
 }
 
 export interface SearchResponse {
@@ -169,9 +174,9 @@ export async function searchEngines(
 
   const tasks: Promise<{ engine: string; results: RawResult[] }> [] = [];
 
-  if (engines.includes('bing')) tasks.push(searchViaBing(query, lang).then((r) => ({ engine: 'bing', results: r })));
+  if (engines.includes('bing')) tasks.push(searchViaBing(query, lang, opts.tbs).then((r) => ({ engine: 'bing', results: r })));
   if (engines.includes('duckduckgo')) tasks.push(searchViaDuckDuckGoApi(query, lang).then((r) => ({ engine: 'duckduckgo', results: r })));
-  if (engines.includes('searxng')) tasks.push(searchViaSearXNG(query, lang).then((r) => ({ engine: 'searxng', results: r })));
+  if (engines.includes('searxng')) tasks.push(searchViaSearXNG(query, lang, undefined, undefined, opts.tbs).then((r) => ({ engine: 'searxng', results: r })));
   if (engines.includes('wikipedia')) tasks.push(searchViaWikipedia(query, lang).then((r) => ({ engine: 'wikipedia', results: r })));
 
   // Custom SearXNG instances — engine IDs of the form "searxng:DisplayName".
@@ -221,6 +226,7 @@ export async function searchEngines(
   // ---- Relevance scoring ----
   const queryTerms = extractTerms(query);
   const queryLower = query.toLowerCase().trim();
+  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(query);
   // For multi-word queries, also check the phrase as a whole.
   for (const item of byUrl.values()) {
     // Tag every result with source: 'web' (this is the default search
@@ -251,6 +257,14 @@ export async function searchEngines(
     if (queryTerms.length > 1 && matchedTerms >= queryTerms.length * 2) {
       relevance += 5.0;
     }
+    // CJK: if the full query appears as a substring in the title, give
+    // a massive bonus. This ensures results that contain the full
+    // CJK phrase (e.g. "世界最高峰" in title) rank above results that
+    // only contain partial matches (e.g. "世界地图").
+    if (hasCJK && queryLower.length >= 3) {
+      if (titleLower.includes(queryLower)) relevance += 15.0;
+      if (snippetLower.includes(queryLower)) relevance += 8.0;
+    }
     item.score += relevance;
     (item as any)._relevance = relevance;
     (item as any)._matchedTerms = matchedTerms;
@@ -264,7 +278,6 @@ export async function searchEngines(
   // term to appear in the title OR snippet — this filters out
   // completely unrelated results (e.g. travel results for "天启").
   let filtered = Array.from(byUrl.values());
-  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(query);
   if (filtered.length > 5 && queryTerms.length > 1) {
     // A result "matches" a term if it appears in title or snippet.
     const termMatchCount = (item: SearchResult) => {
@@ -284,18 +297,51 @@ export async function searchEngines(
     // else keep all (don't over-filter)
   } else if (hasCJK && queryTerms.length >= 1 && filtered.length > 3) {
     // CJK single-term or multi-term: require the query string (or at
-    // least one term) to appear in the title OR snippet. This is
-    // critical for Chinese queries like "天启" where the engine may
-    // return completely unrelated results.
+    // least one extracted term, or a significant substring) to appear
+    // in the title OR snippet. This is critical for Chinese queries
+    // like "天启" where the engine may return completely unrelated
+    // results.
+    //
+    // For multi-char CJK queries (e.g. "世界最高峰"), we also check
+    // for 2+ char substring overlaps — if the result title/snippet
+    // shares any 2-char CJK substring with the query, it's likely
+    // related. This handles cases where the engine returns results
+    // with slightly different wording.
     const queryLower = query.toLowerCase().trim();
+    // Extract all 2-char CJK substrings from the query for fuzzy matching.
+    const cjkSubstrings = new Set<string>();
+    for (let i = 0; i < queryLower.length - 1; i++) {
+      const sub = queryLower.slice(i, i + 2);
+      if (/[\u4e00-\u9fff\u3040-\u30ff]/.test(sub)) {
+        cjkSubstrings.add(sub);
+      }
+    }
     const passing = filtered.filter((r) => {
       const titleLower = r.title.toLowerCase();
       const snippetLower = r.snippet.toLowerCase();
-      // Check if the full query appears, or at least one extracted term.
+      // 1. Check if the full query appears.
       if (queryLower.length >= 2 && (titleLower.includes(queryLower) || snippetLower.includes(queryLower))) return true;
+      // 2. Check if at least one extracted term appears.
       for (const term of queryTerms) {
         if (titleLower.includes(term) || snippetLower.includes(term)) return true;
       }
+      // 3. Fuzzy: check if at least 2 CJK 2-char substrings from the
+      // query appear in the title or snippet. This allows partial
+      // matches like "最高峰" matching "珠穆朗玛峰最高" while
+      // filtering out completely unrelated results like "旅游".
+      let cjkMatchCount = 0;
+      for (const sub of cjkSubstrings) {
+        if (titleLower.includes(sub) || snippetLower.includes(sub)) cjkMatchCount++;
+      }
+      // 3. Fuzzy: check if at least 50% of the 2-char CJK substrings
+      // from the query appear in the title or snippet. This is stricter
+      // than the previous "2 matches" threshold — for a 5-char query
+      // like "世界最高峰", there are 4 substrings, so we need at least
+      // 2 to match (50%). This filters out "世界地图" which only
+      // matches "世界" (1/4 = 25%) but keeps "珠穆朗玛峰最高" which
+      // matches "最高" and potentially "峰最" or "最高" (2+/4).
+      const minCjkMatches = Math.max(2, Math.ceil(cjkSubstrings.size * 0.5));
+      if (cjkMatchCount >= minCjkMatches) return true;
       return false;
     });
     if (passing.length >= 3) {
@@ -333,7 +379,7 @@ interface RawResult {
 // ============================================================
 // Engine: Bing (scrape bing.com/search — works reliably)
 // ============================================================
-async function searchViaBing(query: string, lang: string): Promise<RawResult[]> {
+async function searchViaBing(query: string, lang: string, tbs?: string): Promise<RawResult[]> {
   let localeParams = '';
   if (lang !== 'all') {
     const mapped = BING_LANG_MAP[lang.toLowerCase()];
@@ -343,7 +389,26 @@ async function searchViaBing(query: string, lang: string): Promise<RawResult[]> 
       localeParams = `&setlang=${lang}&cc=${lang.toUpperCase()}&mkt=${lang}-${lang.toUpperCase()}`;
     }
   }
-  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&safe=medium${localeParams}`;
+  // Bing supports `&filters=` param for time-based filtering.
+  // Map Google-style tbs values to Bing's filters format.
+  let filtersParam = '';
+  if (tbs) {
+    // qdr:d → day, qdr:w → week, qdr:m → month, qdr:y → year
+    const tbsMap: Record<string, string> = {
+      'qdr:h': 'ex1:"ez5_19482"',
+      'qdr:d': 'ex1:"ez5_19483"',
+      'qdr:w': 'ex1:"ez5_19484"',
+      'qdr:m': 'ex1:"ez5_19485"',
+      'qdr:y': 'ex1:"ez5_19486"',
+    };
+    if (tbsMap[tbs]) {
+      filtersParam = `&filters=${encodeURIComponent(tbsMap[tbs])}`;
+    } else if (tbs === 'sbd:1') {
+      // Sort by date — Bing uses &filters=ex1:"ez5_19487" for newest first.
+      filtersParam = `&filters=${encodeURIComponent('ex1:"ez5_19487"')}`;
+    }
+  }
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&safe=medium${localeParams}${filtersParam}`;
   // fetchRawHtml tries direct fetch first (fast ~2s), then Playwright (anti-bot).
   const r = await fetchRawHtml(url, 'bing');
   if (!r) return [];
@@ -493,18 +558,30 @@ async function searchViaDuckDuckGoApi(query: string, lang: string): Promise<RawR
 // SearXNG aggregates Google/Bing/DDG so its relevance is better than
 // any single engine.
 // ============================================================
-async function searchViaSearXNG(query: string, lang: string, onlyBase?: string, category?: 'news' | 'images' | 'general'): Promise<RawResult[]> {
+async function searchViaSearXNG(query: string, lang: string, onlyBase?: string, category?: 'news' | 'images' | 'general', tbs?: string): Promise<RawResult[]> {
   const langParam = lang !== 'all' ? `&language=${encodeURIComponent(lang)}` : '';
   // SearXNG `categories` parameter: 'general' (default) | 'news' | 'images'
   // | 'videos' | 'music' | 'files'. When set, we add it to the URL.
   const catParam = category && category !== 'general' ? `&categories=${encodeURIComponent(category)}` : '';
+  // SearXNG supports `time_range` param: day, week, month, year.
+  // Map Google-style tbs to SearXNG time_range values.
+  let timeRangeParam = '';
+  if (tbs) {
+    const tbsToSearxng: Record<string, string> = {
+      'qdr:h': 'day', 'qdr:d': 'day',
+      'qdr:w': 'week', 'qdr:m': 'month', 'qdr:y': 'year',
+    };
+    if (tbsToSearxng[tbs]) {
+      timeRangeParam = `&time_range=${encodeURIComponent(tbsToSearxng[tbs])}`;
+    }
+  }
   // When `onlyBase` is provided, query ONLY that instance (used by the
   // `searxng:Name` engine ID flow). Otherwise, query every configured
   // instance (custom + public defaults).
   const instances = onlyBase ? [onlyBase.replace(/\/$/, '')] : getSearxngInstances();
   const instanceTasks = instances.map(async (base) => {
     try {
-      const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}${catParam}`;
+      const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}${catParam}${timeRangeParam}`;
 
       // Step 1: Direct fetch (fast — SearXNG returns JSON, no JS needed)
       let data: any = null;

@@ -19,67 +19,59 @@ export async function POST(request: NextRequest) {
   if (!body?.query) return jsonResponse({ success: false, error: 'Missing required field: query' }, 400);
 
   const limit = typeof body.limit === 'number' ? body.limit : 50;
-  // Native `engines` array (bing/duckduckgo/searxng/wikipedia/mojeek/...)
-  // takes precedence; Firecrawl's `sources` array is accepted but not yet
-  // mapped to specific engines (we treat it as a filter hint and fall back
-  // to the default engine pool when empty).
   const engines = Array.isArray(body.engines) && body.engines.length > 0
     ? body.engines
     : undefined;
   const requestedLang = typeof body.lang === 'string' && body.lang.trim() ? body.lang.trim() : 'auto';
 
-  // Firecrawl `sources` array: 'web' | 'news' | 'images'. When set,
-  // we route to the appropriate engine pool and tag the result type.
-  // 'web'   → standard search (default — bing/duckduckgo/searxng/wikipedia)
-  // 'news'  → news-oriented search (uses Bing News + Google News via SearXNG)
-  // 'images'→ image search (uses SearXNG + Bing Images)
-  // Multiple sources can be requested in a single call. When omitted,
-  // we default to ['web'].
+  // Firecrawl `sources` array: 'web' | 'news' | 'images'.
   const sources: string[] = Array.isArray(body.sources) && body.sources.length > 0
     ? body.sources.filter((s: any) => typeof s === 'string' && ['web', 'news', 'images'].includes(s.toLowerCase()))
     : ['web'];
 
-  // When `sources` includes 'news' or 'images', we modify the effective
-  // query / engine selection accordingly.
   const wantsNews = sources.includes('news');
   const wantsImages = sources.includes('images');
   const wantsWeb = sources.includes('web') || (!wantsNews && !wantsImages);
 
-  // Firecrawl domain filters: rewrite as `site:` / `-site:` operators that
-  // are appended to the query. includeDomains and excludeDomains are
-  // mutually exclusive in Firecrawl; if both are provided, we use only
-  // the include list.
-  let effectiveQuery: string = body.query;
-  const includeDomains: string[] | undefined = Array.isArray(body.includeDomains) ? body.includeDomains : undefined;
-  const excludeDomains: string[] | undefined = Array.isArray(body.excludeDomains) ? body.excludeDomains : undefined;
-  if (includeDomains && includeDomains.length > 0) {
-    effectiveQuery = `${effectiveQuery} (${includeDomains.map((d) => `site:${d}`).join(' OR ')})`;
-  } else if (excludeDomains && excludeDomains.length > 0) {
-    effectiveQuery = `${effectiveQuery} ${excludeDomains.map((d) => `-site:${d}`).join(' ')}`;
-  }
+  // Domain filters: instead of injecting `site:` operators into the query
+  // (which pollutes relevance scoring and breaks some engines), we pass
+  // them to searchEngines as separate options. The search engines add
+  // `site:` / `-site:` as URL params where supported, and we also
+  // post-filter the results by domain in the route handler.
+  const includeDomains: string[] = Array.isArray(body.includeDomains) ? body.includeDomains : [];
+  const excludeDomains: string[] = Array.isArray(body.excludeDomains) ? body.excludeDomains : [];
 
-  // Firecrawl `tbs` (time-based search) is forwarded as a query modifier
-  // when set (e.g. "qdr:d" → past day). Many engines ignore it; we still
-  // accept and forward it.
-  const tbs: string | undefined = typeof body.tbs === 'string' ? body.tbs : undefined;
-  if (tbs) {
-    effectiveQuery = `${effectiveQuery}&tbs=${encodeURIComponent(tbs)}`;
+  // tbs (time-based search): pass as a separate parameter, NOT mixed
+  // into the query string. Engines that support it (Bing) will use it
+  // as a URL param; others will ignore it.
+  const tbs: string | undefined = typeof body.tbs === 'string' && body.tbs.trim() ? body.tbs.trim() : undefined;
+
+  // The clean query string — no site: operators, no &tbs= appended.
+  // This is what relevance scoring operates on.
+  const cleanQuery: string = body.query.trim();
+
+  // When includeDomains is set, append site: operators to the engine
+  // query (Bing and SearXNG support this natively in the q= parameter).
+  // When excludeDomains is set, append -site: operators.
+  let engineQuery = cleanQuery;
+  if (includeDomains.length > 0) {
+    engineQuery = `${engineQuery} (${includeDomains.map((d) => `site:${d}`).join(' OR ')})`;
+  } else if (excludeDomains.length > 0) {
+    engineQuery = `${engineQuery} ${excludeDomains.map((d) => `-site:${d}`).join(' ')}`;
   }
 
   const { results: allResults, engines: usedEngines, resolvedLang } = await (async () => {
-    // When sources includes multiple types, run them in parallel and
-    // tag each result with its source category.
     const tasks: Array<Promise<{ source: string; results: any[]; engines: string[] }>> = [];
     if (wantsWeb) {
-      tasks.push(searchEngines(effectiveQuery, { limit, engines, lang: requestedLang, source: 'web' })
+      tasks.push(searchEngines(engineQuery, { limit, engines, lang: requestedLang, source: 'web', tbs })
         .then((r) => ({ source: 'web', results: r.results, engines: r.engines })));
     }
     if (wantsNews) {
-      tasks.push(searchEngines(effectiveQuery, { limit, lang: requestedLang, source: 'news' })
+      tasks.push(searchEngines(engineQuery, { limit, lang: requestedLang, source: 'news', tbs })
         .then((r) => ({ source: 'news', results: r.results, engines: r.engines })));
     }
     if (wantsImages) {
-      tasks.push(searchEngines(effectiveQuery, { limit, lang: requestedLang, source: 'images' })
+      tasks.push(searchEngines(engineQuery, { limit, lang: requestedLang, source: 'images', tbs })
         .then((r) => ({ source: 'images', results: r.results, engines: r.engines })));
     }
     const settled = await Promise.allSettled(tasks);
@@ -93,19 +85,39 @@ export async function POST(request: NextRequest) {
     return { results: merged, engines: Array.from(allEngines), resolvedLang: requestedLang };
   })();
 
-  // Firecrawl `safe: true` filters explicit content. We do not have an
-  // explicit content filter at the engine layer, so this is a no-op flag
-  // acknowledged for API compatibility — it does NOT alter results.
+  // ---- Post-filter results by domain (belt-and-suspenders) ----
+  // Even when engines support site: operators, results sometimes
+  // include non-matching domains. We filter here to be sure.
+  let filtered = allResults;
+  if (includeDomains.length > 0) {
+    const domains = includeDomains.map((d) => d.toLowerCase().replace(/^\*\./, ''));
+    filtered = filtered.filter((r: any) => {
+      try {
+        const host = new URL(r.url).hostname.toLowerCase();
+        return domains.some((d) => host === d || host.endsWith('.' + d));
+      } catch { return false; }
+    });
+  }
+  if (excludeDomains.length > 0) {
+    const domains = excludeDomains.map((d) => d.toLowerCase().replace(/^\*\./, ''));
+    filtered = filtered.filter((r: any) => {
+      try {
+        const host = new URL(r.url).hostname.toLowerCase();
+        return !domains.some((d) => host === d || host.endsWith('.' + d));
+      } catch { return true; }
+    });
+  }
+
   const safe = body.safe === true;
 
   // Optional scrapeOptions: when present, scrape each result URL and
   // merge the scraped content into the search result items. Skip
   // scraping when source='images' (no page to scrape, just an image URL).
   const scrapeOpts: Record<string, any> | undefined = body.scrapeOptions;
-  let enriched: typeof allResults;
+  let enriched: typeof filtered;
   if (scrapeOpts && typeof scrapeOpts === 'object' && !wantsImages) {
     const formats: string[] = Array.isArray(scrapeOpts.formats) ? scrapeOpts.formats : ['markdown'];
-    enriched = await mapWithConcurrency(allResults, 3, async (item) => {
+    enriched = await mapWithConcurrency(filtered, 3, async (item) => {
       try {
         const r = await scrapeUrl({
           url: item.url,
@@ -132,7 +144,7 @@ export async function POST(request: NextRequest) {
       }
     });
   } else {
-    enriched = allResults;
+    enriched = filtered;
   }
 
   return jsonResponse({
@@ -143,6 +155,7 @@ export async function POST(request: NextRequest) {
     sources,
     lang: resolvedLang || requestedLang,
     ...(safe !== undefined ? { safe } : {}),
+    ...(tbs ? { tbs } : {}),
     data: enriched,
   });
 }
