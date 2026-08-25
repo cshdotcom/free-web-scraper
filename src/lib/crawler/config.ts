@@ -68,7 +68,7 @@ export const DEFAULT_BRAND_NAME = 'NodeByte Crawl';
 
 /**
  * Website URL appended to every user agent as an identifier.
- * e.g. "NodeByte Crawl/3.8.7 (+https://nodebyte.cn)"
+ * e.g. "NodeByte Crawl/3.8.8 (+https://nodebyte.cn)"
  * This is a WEBSITE URL (not a repo URL) so site admins can identify the
  * crawler and visit the site to learn more / contact the operator.
  * Configurable via CRAWLER_UA_SITE_URL env var.
@@ -125,7 +125,7 @@ export interface DeviceProfile {
  * The UA always includes the site URL suffix so site admins can identify
  * the crawler. Format follows the standard bot convention used by
  * Googlebot, Bingbot, etc.:
- *   "Mozilla/5.0 (compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)"
+ *   "Mozilla/5.0 (compatible; NodeByte Bot/3.8.8; +https://nodebyte.cn)"
  *
  * The `compatible;` token + `;` separators match the RFC 9309 bot UA
  * convention so site admins and WAFs can identify our crawler by the
@@ -139,7 +139,7 @@ export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   // standard for crawlers — Googlebot, Bingbot, etc. all use "Bot").
   // Preserve spaces: "NodeByte Bot" not "NodeByteBot".
   const botToken = brand.replace(/\s*Crawl\s*$/i, ' Bot').trim();
-  const version = '3.8.7';
+  const version = '3.8.8';
 
   let pool: string[];
   let viewports: typeof DESKTOP_VIEWPORTS;
@@ -161,12 +161,12 @@ export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   const vp = viewports[Math.floor(Math.random() * viewports.length)];
 
   // Build the UA following the standard bot convention:
-  //   Mozilla/5.0 (compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)
+  //   Mozilla/5.0 (compatible; NodeByte Bot/3.8.8; +https://nodebyte.cn)
   // This is the same format used by Googlebot:
   //   Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
   //
   // For mobile, we use the smartphone variant:
-  //   Mozilla/5.0 (iPhone; ...; compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)
+  //   Mozilla/5.0 (iPhone; ...; compatible; NodeByte Bot/3.8.8; +https://nodebyte.cn)
   // (The mobile UA already starts with "Mozilla/5.0 (iPhone; ..." so
   // we insert "; compatible; NodeByte Bot/ver; +url" before the closing ")".)
   const botComment = `compatible; ${botToken}/${version}; +${siteUrl}`;

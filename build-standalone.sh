@@ -32,6 +32,36 @@ elif [ -d "${HOME}/.cache/ms-playwright" ]; then
   cp -r "${HOME}/.cache/ms-playwright/ffmpeg-1011" "${PKG}/browsers/" 2>/dev/null
 fi
 
+echo "[build] Copying bundled fonts (CJK + Latin + Emoji)..."
+mkdir -p "${PKG}/fonts"
+# Copy essential multi-language fonts so browser screenshots render
+# CJK/Cyrillic/Arabic/Hebrew/Thai text correctly WITHOUT requiring
+# the user to run install-deps.sh first. These fonts are loaded by
+# Chromium via the FONTCONFIG_PATH env var set in start.sh.
+FONT_DIRS=(
+  "/usr/share/fonts/truetype/chinese/NotoSansSC[wght].ttf"
+  "/usr/share/fonts/truetype/chinese/LiberationSans-Regular.ttf"
+  "/usr/share/fonts/truetype/chinese/LiberationMono-Regular.ttf"
+  "/usr/share/fonts/truetype/chinese/LiberationSerif-Regular.ttf"
+  "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
+  "/usr/share/fonts/truetype/emoji/NotoColorEmoji.ttf"
+  "/usr/share/fonts/truetype/noto-serif-sc/NotoSerifSC-Regular.ttf"
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+  "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+  "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+)
+for font in "${FONT_DIRS[@]}"; do
+  if [ -f "$font" ]; then
+    cp "$font" "${PKG}/fonts/" 2>/dev/null && echo "  ✓ $(basename $font)"
+  fi
+done
+# Also try the Noto Sans SC static (non-variable) if available
+if [ -f "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" ]; then
+  cp "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" "${PKG}/fonts/" 2>/dev/null && echo "  ✓ NotoSansCJK-Regular.ttc"
+fi
+echo "  Total fonts: $(du -sh ${PKG}/fonts/ 2>/dev/null | cut -f1)"
+
 echo "[build] Writing start.sh + SQL + install-deps..."
 cp "${ROOT}/install-deps.sh" "${PKG}/install-deps.sh" 2>/dev/null || true
 chmod +x "${PKG}/install-deps.sh" 2>/dev/null || true
@@ -49,6 +79,34 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Set browser path (so Playwright finds bundled Chromium)
 export PLAYWRIGHT_BROWSERS_PATH="$DIR/browsers"
+
+# Set bundled fonts path so Chromium can find CJK/Latin/Emoji fonts
+# WITHOUT requiring the user to install system font packages. The
+# fonts/ directory contains Noto Sans SC, WenQuanYi Zen Hei, Noto
+# Color Emoji, Liberation Sans, and DejaVu — covering CJK, Latin,
+# Cyrillic, and Emoji rendering. We add this to FONTCONFIG_PATH
+# (in addition to the system path) so system-installed fonts are
+# still found when available.
+if [ -d "$DIR/fonts" ]; then
+  export FONTCONFIG_PATH="$DIR/fonts${FONTCONFIG_PATH:+:$FONTCONFIG_PATH}"
+  # Generate a fonts.conf that tells fontconfig to look in our dir.
+  if [ ! -f "$DIR/fonts/fonts.conf" ]; then
+    cat > "$DIR/fonts/fonts.conf" << 'FONTSCONF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>.'</dir>
+  <cachedir>./cache</cachedir>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+</fontconfig>
+FONTSCONF
+    mkdir -p "$DIR/fonts/cache"
+  fi
+  # Rebuild font cache for our bundled fonts
+  if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "$DIR/fonts" >/dev/null 2>&1 || true
+  fi
+fi
 
 # Start. Node 20+ --env-file properly parses .env (handles spaces, quotes).
 cd "$DIR/app"
@@ -70,7 +128,7 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v3.8.7 — Standalone (Single Port)
+# NodeByte Crawl v3.8.8 — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
 
