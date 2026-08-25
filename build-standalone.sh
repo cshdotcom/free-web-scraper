@@ -70,7 +70,7 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v3.8.0 — Standalone (Single Port)
+# NodeByte Crawl v3.8.1 — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
 
@@ -96,11 +96,21 @@ start.sh will:
 ```bash
 bash install-deps.sh
 ```
-This installs the system shared libraries Chromium needs (libatk, libcups, etc).
+This installs the system shared libraries Chromium needs (libatk, libcups,
+etc.) PLUS multi-language fonts (Noto CJK, Noto Arabic, Noto Devanagari,
+Noto Thai, WenQuanYi, Liberation, IPA Japanese). After install, browser
+screenshots render Chinese/Japanese/Korean/Arabic/Hebrew/Thai/Indic text
+correctly — no more tofu boxes (□□□).
 
 ## Configuration
 
 Edit `.env` — see `.env.example` for all options.
+
+Key v3.8.1 additions:
+- CRAWLER_ALLOW_ROBOTS_OVERRIDE — let clients override robots.txt
+- CRAWLER_RESPECT_NOINDEX — honour noindex as AI opt-out (default off)
+- CRAWLER_ROBOTS_CACHE_TTL_MS — per-host robots.txt cache TTL
+- CRAWLER_MAX_BODY_BYTES — response size cap (default 50 MB)
 
 ## API (v2 primary, v1 back-compat, SearxNG compatible)
 
@@ -108,6 +118,16 @@ POST /v2/scrape, /v2/scrape/batch, /v2/batch/scrape, /v2/crawl, /v2/map, /v2/sea
 GET  /v2/batch/scrape/:id, /v2/batch/scrape/:id/errors, /v2/crawl/:id, /v2/crawl/:id/errors
 DELETE /v2/batch/scrape/:id, /v2/crawl/:id
 GET  /search?q=&format=json (SearxNG/OpenWebUI compatible)
+
+## New v3.8.1 features
+
+- Sitemap auto-discovery in /v2/crawl (no manual path needed)
+- robots.txt + 5 AI opt-out compliance layers (403 + blockedReason)
+- SSRF protection (private IPs, cloud metadata, DNS-rebinding)
+- Branding format (extract colors/fonts/logo/typography)
+- Images format improved (width/height, picture source)
+- Search sources: web/news/images (parallel, tagged with source)
+- SearXNG: display configured name (not URL)
 README
 
 echo "[build] Done. Package size:"

@@ -994,3 +994,139 @@ would otherwise return `null` from `getAttribute`.
 - `lang: 'auto' | 'all' | en | zh | ja | ...` — auto-detecting search
   language.
 - The `/search?q=&format=json` SearxNG-compatible endpoint.
+
+---
+
+## v3.8.1 — Sitemap auto-discovery + robots.txt + AI opt-out + Branding + Images + Sources + SSRF + multi-language fonts
+
+**Task:** Match Firecrawl v2 parity for all non-AI features. Add
+comprehensive safety/security additions. Add multi-language font
+support so browser screenshots don't show tofu boxes for non-Latin
+text.
+
+### 9 major feature additions (no AI features)
+
+1. **Sitemap auto-discovery** (`src/lib/crawler/sitemap.ts`): auto-fetch
+   robots.txt Sitemap: lines + common paths + `<link rel="sitemap">`
+   hints, then recursively follow `<sitemapindex>` files up to the new
+   `sitemapDepth` parameter (default 3, max 10). Frontend + API both
+   expose this. No manual sitemap path needed.
+
+2. **Robots.txt + AI opt-out compliance** (`src/lib/crawler/robots.ts`):
+   5 compliance layers — robots.txt (RFC 9309), .well-known/ai.txt,
+   X-Robots-Tag (noai/noindex), `<meta name="robots" content="noai">`,
+   CC-NOAI + TDM-Rep headers. Returns 403 + `blockedReason` with the
+   specific rule. `ignoreRobotsTxt` parameter honoured only when
+   `CRAWLER_ALLOW_ROBOTS_OVERRIDE=true`. AI opt-out layers are NEVER
+   bypassable.
+
+3. **SSRF protection** (`src/lib/crawler/url-guard.ts`): blocks private
+   IPs (RFC 1918, loopback, link-local, carrier-grade NAT, multicast,
+   reserved), IPv6 site-local/loopback/link-local, cloud metadata
+   endpoints (169.254.169.254, metadata.google.internal,
+   metadata.aws.internal). DNS-aware (resolves hostname, checks ALL
+   returned IPs to catch DNS-rebinding). Blocked protocols: file,
+   data, javascript, ftp, mailto, blob, view-source, about, ws, wss.
+   URL length cap 8KB. Response size cap (CRAWLER_MAX_BODY_BYTES,
+   default 50MB).
+
+4. **Branding format**: extract site visual identity (colorScheme,
+   logo, colors primary/secondary/accent/background/textPrimary/
+   textSecondary, fonts[], typography fontFamilies/fontSizes) from
+   `<meta theme-color>`, CSS custom properties, and computed styles.
+
+5. **Images format improved**: returns url/alt/width/height (intrinsic
+   naturalWidth/naturalHeight), skips data: URIs + tracking pixels
+   (<2x2), includes `<picture><source>` srcset entries, de-duplicates.
+
+6. **Search sources: web/news/images**: `/v2/search` accepts a
+   `sources` array; multiple run in parallel and results are tagged
+   with `source`. News results include `publishedDate`. Image results
+   include `imageUrl`/`width`/`height`. New engines:
+   `searchViaBingNews`, `searchViaBingImages`. SearXNG now accepts
+   `category` param (general/news/images). Frontend Search tab has
+   new Sources selector with 3 toggle buttons (Globe2/FileText/
+   ImageIcon icons).
+
+7. **Multi-language fonts**: `install-deps.sh` now installs Noto CJK
+   + Noto Color Emoji + Noto Sans Arabic + Noto Sans Devanagari +
+   Noto Sans Thai + WenQuanYi + Liberation + IPA (Japanese) for
+   Debian/Ubuntu, RHEL/CentOS/Fedora, and Alpine. Runs `fc-cache -f`
+   after install. Browser screenshots now render CJK/Cyrillic/Arabic/
+   Hebrew/Thai/Indic/Korean text correctly.
+
+8. **SearXNG: display configured name (not URL)**: `/api/engines`
+   accepts URL-only entries (auto-derives name from hostname with
+   leading searx./searxng./www. stripped). Frontend always shows the
+   human-readable name.
+
+9. **Bundle install-deps.sh into standalone**: already copied by
+   `build-standalone.sh`, now includes multi-language fonts.
+
+### Documentation
+
+- `docs/data.ts`: added `ignoreRobotsTxt`, `branding`, `sitemapDepth`
+  params + `sources` for search
+- `.env.example`: added `CRAWLER_ALLOW_ROBOTS_OVERRIDE`,
+  `CRAWLER_RESPECT_NOINDEX`, `CRAWLER_ROBOTS_CACHE_TTL_MS`,
+  `CRAWLER_MAX_BODY_BYTES`
+- Standalone README in `build-standalone.sh`: mentions multi-language
+  fonts + the 4 new env vars
+- This worklog entry
+
+### Version bump
+
+3.8.0 → 3.8.1 (config.ts, hero badge, footer, /api/status, package.json,
+.env.example CRAWLER_USER_AGENT)
+
+### Verification
+
+- Production build succeeds (all routes listed)
+- Dev server reports version 3.8.1
+- SSRF protection blocks 127.0.0.1 (403 + reason), file:// (400 +
+  reason), 169.254.169.254 (403 + reason)
+- Branding extraction returns colors, fonts, typography from
+  example.com
+- Search `sources: ['images']` returns image results with imageUrl
+- Search `sources: ['news']` returns news results
+- SearXNG custom instances display as configured names not URLs
+- Frontend Search tab renders Sources selector (web/news/images
+  toggle buttons with Globe2/FileText/ImageIcon icons)
+- Standalone package starts cleanly, /api/status reports 3.8.1,
+  /api/engines returns custom SearXNG list, scrape with branding
+  works, SSRF block works
+
+### Files changed (20 files, +1951/-102 lines)
+
+- `install-deps.sh` — adds multi-language font packages + `fc-cache -f`
+- `src/lib/crawler/url-guard.ts` (NEW, 353 lines)
+- `src/lib/crawler/robots.ts` (NEW, 218 lines)
+- `src/lib/crawler/sitemap.ts` (NEW, 237 lines)
+- `src/lib/crawler/crawler.ts` — integrates guard + robots checks;
+  adds branding format; improves images format (+110 lines)
+- `src/lib/crawler/store.ts` — integrates sitemap auto-discovery into
+  crawl job; supports sitemapDepth, ignoreRobotsTxt (+54 lines)
+- `src/lib/crawler/search.ts` — adds news/images source routing;
+  SearXNG category param (+316 lines)
+- `src/app/api/engines/route.ts` — accepts URL-only entries;
+  auto-derives name
+- `src/app/v2/scrape/route.ts` — passes ignoreRobotsTxt through
+- `src/app/v2/crawl/route.ts` — adds sitemapDepth, ignoreRobotsTxt
+- `src/app/v2/search/route.ts` — adds sources routing
+- `src/components/test/crawl-tab.tsx` — adds Sitemap dropdown, Sitemap
+  depth input, allowSubdomains/crawlEntireDomain/ignoreQueryParameters
+  toggles
+- `src/components/test/search-tab.tsx` — adds Sources selector
+- `src/components/docs/data.ts` — documents new params
+- `.env.example` — adds 4 new env vars + multi-language font notes
+- `package.json`, `config.ts`, `hero.tsx`, `footer.tsx`,
+  `api/status/route.ts` — version bump
+
+### Release assets (GitHub)
+
+- `free-web-scraper-v3.8.1-source.tar.gz` (210 KB)
+- `free-web-scraper-v3.8.1-source.zip` (279 KB)
+- `nodebyte-crawl-v3.8.1-standalone.zip` (346 MB)
+- `RELEASE-NOTES.md` (10 KB)
+
+All uploaded to https://github.com/cshdotcom/free-web-scraper/releases/tag/v3.8.1
