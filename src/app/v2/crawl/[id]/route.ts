@@ -21,6 +21,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     total: job.total,
     completed: job.completed,
     data: job.data,
+    errors: job.errors,
     expiresAt: new Date(job.expiresAt).toISOString(),
   });
 }

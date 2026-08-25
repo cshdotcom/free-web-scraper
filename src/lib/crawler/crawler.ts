@@ -6,7 +6,7 @@ import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep } from './
 
 export interface ScrapeOptions {
   url: string;
-  /** Output formats: 'markdown' | 'html' | 'rawHtml' | 'links' | 'screenshot' */
+  /** Output formats: 'markdown' | 'html' | 'rawHtml' | 'links' | 'images' | 'screenshot' */
   formats?: string[];
   /** Only extract main content (default true) */
   onlyMainContent?: boolean;
@@ -32,12 +32,65 @@ export interface ScrapeOptions {
    *  When set, picks a matching UA + viewport + touch from the device pool.
    *  Ignored if `userAgent` is explicitly provided. Default 'auto'. */
   device?: DeviceType;
+  /** Mobile shortcut: when true, forces mobile device emulation (same as
+   *  device: 'mobile'). Ignored when `device` is explicitly set.
+   *  Firecrawl-compatible alias. */
+  mobile?: boolean;
   /** Cookies to inject before navigation. Each scrape gets a FRESH
    *  browser context — cookies are ONLY used for this request and
    *  discarded immediately after. Not persisted anywhere.
    *  Accepts: array of {name, value, domain?, path?, ...} OR
    *  a cookie string "name=value; name2=value2" (parsed automatically). */
   cookies?: CookieInput[] | string;
+  /** Browser actions to run before scraping. Each action is an object
+   *  with a `type` field and type-specific parameters. Supported types:
+   *    - { type: 'wait', milliseconds?: number, selector?: string }
+   *    - { type: 'click', selector: string, all?: boolean }
+   *    - { type: 'write', text: string }
+   *    - { type: 'press', key: string }
+   *    - { type: 'scroll', direction?: 'up'|'down', selector?: string }
+   *    - { type: 'screenshot', fullPage?: boolean, quality?: number, viewport?: {width,height} }
+   *    - { type: 'pdf', format?: string, landscape?: boolean, scale?: number }
+   *    - { type: 'executeJavascript', script: string }
+   *  Up to 50 actions; combined wait + waitFor must not exceed 60s. */
+  actions?: BrowserAction[];
+  /** Location object: { country?: string, languages?: string[] }.
+   *  `country` is an ISO 3166-1 alpha-2 code (e.g. 'US', 'DE', 'JP').
+   *  When set, configures the browser locale + timezone + Accept-Language
+   *  header to match the target region. */
+  location?: { country?: string; languages?: string[] };
+  /** Custom HTTP headers to send with the navigation request. */
+  headers?: Record<string, string>;
+  /** Cache hint: max age in ms for which a cached result is acceptable.
+   *  0 = always fetch fresh. Currently informational — the in-process
+   *  crawler does not maintain a response cache, but the parameter is
+   *  accepted for Firecrawl API compatibility. */
+  maxAge?: number;
+  /** Screenshot options applied when `screenshot` is in formats or when
+   *  a screenshot action is used. Accepts: { fullPage?, quality?, viewport? }. */
+  screenshot?: { fullPage?: boolean; quality?: number; viewport?: { width: number; height: number } };
+  /** Attributes format: extract specific HTML attributes from elements
+   *  matching CSS selectors. Each entry: { selector, attribute }.
+   *  Returned as `data.attributes: { [selector+attribute]: string[] }`. */
+  attributes?: Array<{ selector: string; attribute: string }>;
+}
+
+/** Browser action descriptor — see ScrapeOptions.actions. */
+export interface BrowserAction {
+  type: 'wait' | 'click' | 'write' | 'press' | 'scroll' | 'screenshot' | 'pdf' | 'executeJavascript' | 'scrape';
+  milliseconds?: number;
+  selector?: string;
+  all?: boolean;
+  text?: string;
+  key?: string;
+  direction?: 'up' | 'down';
+  fullPage?: boolean;
+  quality?: number;
+  viewport?: { width: number; height: number };
+  format?: string;
+  landscape?: boolean;
+  scale?: number;
+  script?: string;
 }
 
 export interface CookieInput {
@@ -81,7 +134,16 @@ export interface ScrapeData {
   html?: string;
   rawHtml?: string;
   links?: Array<{ url: string; text: string }>;
+  images?: Array<{ url: string; alt?: string }>;
   screenshot?: string;
+  /** Per-action screenshots captured via the `screenshot` action. */
+  actions?: {
+    screenshots?: string[];
+    scrapes?: Array<{ url: string; html: string }>;
+    javascriptReturns?: unknown[];
+  };
+  /** Extracted attribute values keyed by `${selector}|${attribute}`. */
+  attributes?: Record<string, string[]>;
   metadata: PageMetadata;
   /** Which extraction strategy was used */
   strategy?: string;
@@ -131,7 +193,8 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   // 'html'/'rawHtml' formats, we DON'T block images (they need to render
   // for a faithful screenshot and complete HTML). For markdown-only scrapes,
   // blocking images/fonts speeds things up without losing content.
-  const wantsVisual = formats.includes('screenshot') || formats.includes('html') || formats.includes('rawHtml');
+  // Also keep images when 'images' format is requested.
+  const wantsVisual = formats.includes('screenshot') || formats.includes('html') || formats.includes('rawHtml') || formats.includes('images');
   const blockResources =
     opts.blockResources === null ? null
       : opts.blockResources
@@ -156,20 +219,29 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     attempts = attempt + 1;
     // If user provided a custom UA, use it. Otherwise pick a device profile
     // (UA + viewport + touch) based on the `device` option.
-    const device = opts.device ?? 'auto';
+    // `mobile: true` is a Firecrawl-compatible shortcut for device: 'mobile'.
+    const device = opts.device ?? (opts.mobile ? 'mobile' : 'auto');
     const profile = opts.userAgent
       ? { userAgent: opts.userAgent, viewport: { width: config.viewportWidth, height: config.viewportHeight }, isMobile: false, hasTouch: false }
       : pickDeviceProfile(device);
+    // Screenshot viewport override (Firecrawl screenshot.viewport)
+    const screenshotViewport = opts.screenshot?.viewport;
+    const viewport = screenshotViewport ?? profile.viewport;
     const result = await attemptScrape(browser, url, {
       formats, onlyMainContent, includeTags, excludeTags,
       timeout, waitFor, removeBase64Images,
       userAgent: profile.userAgent,
-      viewport: profile.viewport,
+      viewport,
       isMobile: profile.isMobile,
       hasTouch: profile.hasTouch,
       blockResources,
       waitForSelector: opts.waitForSelector,
       cookies: parseCookies(opts.cookies, opts.url),
+      actions: opts.actions ?? [],
+      location: opts.location,
+      headers: opts.headers,
+      screenshot: opts.screenshot,
+      attributes: opts.attributes,
     });
 
     if (result.success) {
@@ -212,6 +284,11 @@ interface AttemptParams {
   blockResources: string[] | null;
   waitForSelector?: string;
   cookies: CookieInput[];
+  actions: BrowserAction[];
+  location?: { country?: string; languages?: string[] };
+  headers?: Record<string, string>;
+  screenshot?: { fullPage?: boolean; quality?: number; viewport?: { width: number; height: number } };
+  attributes?: Array<{ selector: string; attribute: string }>;
 }
 
 /**
@@ -228,6 +305,30 @@ async function attemptScrape(
   let lastError: string | null = null;
 
   try {
+    // Resolve location-driven locale, timezone, and Accept-Language values.
+    // When `location` is set, override the defaults to match the target region.
+    const loc = params.location ?? {};
+    const locale = (loc.languages && loc.languages[0]) || localeForCountry(loc.country) || 'en-US';
+    const timezone = timezoneForCountry(loc.country) || 'UTC';
+    const acceptLang = (loc.languages && loc.languages.join(','))
+      || acceptLanguageForCountry(loc.country)
+      || 'en-US,en;q=0.9';
+
+    // Merge default headers with user-provided custom headers (user wins).
+    const extraHTTPHeaders: Record<string, string> = {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': acceptLang,
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      ...(params.headers || {}),
+    };
+
     // Create a FRESH browser context for each request.
     // This ensures complete cookie isolation — cookies from one request
     // never leak to another. After context.close(), all cookies are gone.
@@ -236,22 +337,11 @@ async function attemptScrape(
       viewport: params.viewport,
       isMobile: params.isMobile,
       hasTouch: params.hasTouch,
-      locale: 'en-US',
-      timezoneId: 'UTC',
+      locale,
+      timezoneId: timezone,
       javaScriptEnabled: true,
       ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-      },
+      extraHTTPHeaders,
     });
 
     page = await context.newPage();
@@ -357,6 +447,84 @@ async function attemptScrape(
 
     if (params.waitFor > 0) {
       await page.waitForTimeout(Math.min(params.waitFor, 10000));
+    }
+
+    // ---- Run pre-scrape browser actions (Firecrawl-compatible) ----
+    // Each action runs sequentially. Captures screenshots from `screenshot`
+    // actions into `actions.screenshots`, JavaScript return values from
+    // `executeJavascript` into `actions.javascriptReturns`, and intermediate
+    // HTML snapshots from `scrape` actions into `actions.scrapes`.
+    const actionScreenshots: string[] = [];
+    const actionScrapes: Array<{ url: string; html: string }> = [];
+    const actionJsReturns: unknown[] = [];
+    if (params.actions && params.actions.length > 0) {
+      // Cap total actions at 50 (Firecrawl-style limit) to protect the worker.
+      const actions = params.actions.slice(0, 50);
+      for (const act of actions) {
+        try {
+          switch (act.type) {
+            case 'wait':
+              if (act.selector) {
+                await page.waitForSelector(act.selector, { timeout: Math.min(params.timeout, 30000) });
+              } else if (act.milliseconds) {
+                await page.waitForTimeout(Math.min(act.milliseconds, 30000));
+              }
+              break;
+            case 'click':
+              if (act.all) {
+                await page.locator(act.selector!).click({ timeout: 5000 }).catch(() => {});
+              } else {
+                await page.click(act.selector!, { timeout: 5000 }).catch(() => {});
+              }
+              break;
+            case 'write':
+              await page.keyboard.type(act.text || '', { delay: 10 });
+              break;
+            case 'press':
+              await page.keyboard.press(act.key || 'Enter');
+              break;
+            case 'scroll':
+              await page.evaluate((dir) => {
+                const dy = dir === 'up' ? -window.innerHeight : window.innerHeight;
+                window.scrollBy(0, dy);
+              }, act.direction || 'down');
+              break;
+            case 'screenshot': {
+              const buf = await page.screenshot({
+                fullPage: act.fullPage ?? false,
+                type: 'png',
+                ...(act.quality ? { quality: act.quality } : {}),
+              });
+              actionScreenshots.push(`data:image/png;base64,${buf.toString('base64')}`);
+              break;
+            }
+            case 'pdf': {
+              const buf = await page.pdf({
+                format: act.format || 'Letter',
+                landscape: act.landscape ?? false,
+                scale: act.scale ?? 1,
+              });
+              actionScreenshots.push(`data:application/pdf;base64,${buf.toString('base64')}`);
+              break;
+            }
+            case 'executeJavascript': {
+              const ret = await page.evaluate(act.script || 'null');
+              actionJsReturns.push(ret);
+              break;
+            }
+            case 'scrape': {
+              const html = await page.content();
+              actionScrapes.push({ url: page.url(), html });
+              break;
+            }
+            default:
+              // Ignore unknown action types — forward-compatible.
+              break;
+          }
+        } catch {
+          // best-effort: skip failed actions
+        }
+      }
     }
 
     // ---- Trigger lazy-loaded images to load ----
@@ -474,13 +642,55 @@ async function attemptScrape(
     if (params.formats.includes('links')) {
       data.links = extracted.links;
     }
+    if (params.formats.includes('images')) {
+      try {
+        const imgs = await page.evaluate(() => {
+          return Array.from(document.querySelectorAll('img')).map((img) => ({
+            url: img.currentSrc || img.src || '',
+            alt: img.alt || '',
+          })).filter((i) => i.url && !i.url.startsWith('data:'));
+        });
+        data.images = imgs as Array<{ url: string; alt?: string }>;
+      } catch {
+        data.images = [];
+      }
+    }
     if (params.formats.includes('screenshot')) {
       try {
-        const buf = await page.screenshot({ fullPage: true, type: 'png' });
+        const buf = await page.screenshot({
+          fullPage: params.screenshot?.fullPage ?? true,
+          type: 'png',
+          ...(params.screenshot?.quality ? { quality: params.screenshot.quality } : {}),
+        });
         data.screenshot = `data:image/png;base64,${buf.toString('base64')}`;
       } catch {
         // Screenshot failed; skip it.
       }
+    }
+    // Attributes format: extract specific HTML attributes from CSS selectors.
+    if (params.attributes && params.attributes.length > 0) {
+      try {
+        const out: Record<string, string[]> = {};
+        for (const spec of params.attributes) {
+          const key = `${spec.selector}|${spec.attribute}`;
+          out[key] = await page.evaluate((sel, attr) => {
+            return Array.from(document.querySelectorAll(sel))
+              .map((el) => (el as HTMLElement).getAttribute(attr) || '')
+              .filter(Boolean);
+          }, spec.selector, spec.attribute);
+        }
+        data.attributes = out;
+      } catch {
+        // best-effort
+      }
+    }
+    // Attach action captures (screenshots / scrapes / JS returns).
+    if (actionScreenshots.length || actionScrapes.length || actionJsReturns.length) {
+      data.actions = {
+        screenshots: actionScreenshots.length ? actionScreenshots : undefined,
+        scrapes: actionScrapes.length ? actionScrapes : undefined,
+        javascriptReturns: actionJsReturns.length ? actionJsReturns : undefined,
+      };
     }
 
     return { success: true, data };
@@ -513,18 +723,43 @@ async function attemptScrape(
 
 export interface MapResult {
   success: boolean;
-  links?: string[];
+  links?: Array<string | { url: string; title?: string; description?: string }>;
   error?: string;
 }
 
 /**
  * Map a site: fetch the entry URL, extract all links, and (optionally)
  * fetch /sitemap.xml if the site has one. Returns deduped absolute URLs.
+ *
+ * `sitemap` follows Firecrawl's enum:
+ *   - 'include' (default): use sitemap + on-page links.
+ *   - 'skip': ignore sitemap, only scrape the seed page for links.
+ *   - 'only': ONLY use the sitemap (no page scrape).
+ *
+ * When the sitemap contains <url> entries with <title>/<description>
+ * child elements (some custom sitemaps do), they are forwarded into
+ * the response. Otherwise the link objects carry just the URL.
  */
-export async function mapUrl(url: string, opts: { search?: string; limit?: number; ignoreSitemap?: boolean; includeSubdomains?: boolean } = {}): Promise<MapResult> {
+export async function mapUrl(
+  url: string,
+  opts: {
+    search?: string;
+    limit?: number;
+    /** @deprecated use `sitemap` enum instead — kept for backward compat. */
+    ignoreSitemap?: boolean;
+    sitemap?: 'include' | 'skip' | 'only';
+    includeSubdomains?: boolean;
+  } = {},
+): Promise<MapResult> {
   const limit = opts.limit ?? 100;
   const search = (opts.search ?? '').toLowerCase();
-  const ignoreSitemap = opts.ignoreSitemap ?? false;
+  // Resolve the sitemap enum: explicit `sitemap` value wins; otherwise
+  // legacy `ignoreSitemap: true` maps to 'skip'.
+  const sitemapMode: 'include' | 'skip' | 'only' =
+    opts.sitemap === 'skip' ? 'skip'
+    : opts.sitemap === 'only' ? 'only'
+    : opts.ignoreSitemap ? 'skip'
+    : 'include';
   const includeSubdomains = opts.includeSubdomains ?? false;
 
   let baseUrl: URL;
@@ -534,22 +769,23 @@ export async function mapUrl(url: string, opts: { search?: string; limit?: numbe
     return { success: false, error: `Invalid URL: ${url}` };
   }
 
-  const collected = new Set<string>();
+  const collected = new Map<string, { title?: string; description?: string }>();
 
   // Try sitemap first (faster + more complete) unless explicitly skipped.
-  if (!ignoreSitemap) {
+  if (sitemapMode !== 'skip') {
     try {
-      const sitemapUrls = await trySitemaps(baseUrl);
-      for (const u of sitemapUrls) {
-        collected.add(u);
+      const sitemapEntries = await trySitemaps(baseUrl);
+      for (const e of sitemapEntries) {
+        collected.set(e.url, { title: e.title, description: e.description });
       }
     } catch {
       // ignore sitemap failures; fall through to page-scraping.
     }
   }
 
-  // If sitemap didn't give us enough, scrape the page itself for links.
-  if (collected.size < limit) {
+  // If sitemap didn't give us enough (and the user didn't ask for 'only'),
+  // scrape the page itself for links.
+  if (sitemapMode !== 'only' && collected.size < limit) {
     const result = await scrapeUrl({
       url,
       formats: ['links'],
@@ -558,13 +794,20 @@ export async function mapUrl(url: string, opts: { search?: string; limit?: numbe
     });
     if (result.success && result.data?.links) {
       for (const link of result.data.links) {
-        collected.add(link.url);
+        const linkUrl = typeof link === 'string' ? link : link.url;
+        const linkText = typeof link === 'string' ? '' : (link.text || '');
+        const existing = collected.get(linkUrl);
+        if (!existing) {
+          collected.set(linkUrl, { title: linkText || undefined, description: undefined });
+        } else if (!existing.title && linkText) {
+          existing.title = linkText;
+        }
       }
     }
   }
 
   // Filter by same-origin (or subdomain if includeSubdomains).
-  const filtered = Array.from(collected).filter((u) => {
+  const filteredEntries = Array.from(collected.entries()).filter(([u]) => {
     try {
       const parsed = new URL(u);
       if (includeSubdomains) {
@@ -578,28 +821,62 @@ export async function mapUrl(url: string, opts: { search?: string; limit?: numbe
 
   // Apply search filter.
   const searched = search
-    ? filtered.filter((u) => u.toLowerCase().includes(search) || decodeURIComponent(u).toLowerCase().includes(search))
-    : filtered;
+    ? filteredEntries.filter(([u, meta]) =>
+      u.toLowerCase().includes(search)
+      || decodeURIComponent(u).toLowerCase().includes(search)
+      || (meta.title || '').toLowerCase().includes(search)
+      || (meta.description || '').toLowerCase().includes(search))
+    : filteredEntries;
 
-  // Sort + limit.
-  const sorted = Array.from(new Set(searched)).sort();
-  return { success: true, links: sorted.slice(0, limit) };
+  // Sort + limit. Return objects with title/description only when at least
+  // one of those is present; otherwise return bare strings for backward
+  // compatibility with the original /v2/map response shape.
+  const sorted = searched.sort(([a], [b]) => a.localeCompare(b));
+  const sliced = sorted.slice(0, limit);
+  const links: Array<string | { url: string; title?: string; description?: string }> = sliced.map(([u, meta]) => {
+    if (meta.title || meta.description) {
+      return { url: u, title: meta.title, description: meta.description };
+    }
+    return u;
+  });
+  return { success: true, links };
 }
 
-async function trySitemaps(baseUrl: URL): Promise<string[]> {
+async function trySitemaps(baseUrl: URL): Promise<Array<{ url: string; title?: string; description?: string }>> {
   const candidates = ['/sitemap.xml', '/sitemap_index.xml', '/sitemap-index.xml'];
-  const out: string[] = [];
+  const out: Array<{ url: string; title?: string; description?: string }> = [];
   for (const path of candidates) {
     try {
       const smUrl = new URL(path, baseUrl).toString();
       const resp = await fetch(smUrl, { method: 'GET' });
       if (!resp.ok) continue;
       const text = await resp.text();
-      // crude regex parse; handles both <urlset> and <sitemapindex> schemas.
+      // Crude regex parse; handles both <urlset> and <sitemapindex> schemas.
+      // We extract <loc> URLs and (when present) <title>/<description>
+      // siblings inside <url> entries (custom sitemap extensions).
+      const blockRegex = /<url>([\s\S]*?)<\/url>/gi;
+      let m: RegExpExecArray | null;
+      let hasUrlBlocks = false;
+      while ((m = blockRegex.exec(text)) !== null) {
+        hasUrlBlocks = true;
+        const block = m[1];
+        const loc = block.match(/<loc>([^<]+)<\/loc>/i);
+        if (!loc) continue;
+        const u = loc[1].trim();
+        const titleMatch = block.match(/<title>([^<]*)<\/title>/i);
+        const descMatch = block.match(/<(?:description|news\:title|image\:title)>([^<]*)<\/(?:description|news\:title|image\:title)>/i);
+        out.push({
+          url: u,
+          title: titleMatch ? titleMatch[1].trim() : undefined,
+          description: descMatch ? descMatch[1].trim() : undefined,
+        });
+      }
+      if (hasUrlBlocks && out.length > 0) return out;
+      // Fallback: plain <loc> extraction (sitemapindex-style or simple urlset).
       const locMatches = text.match(/<loc>([^<]+)<\/loc>/g) || [];
-      for (const m of locMatches) {
-        const u = m.replace(/<\/?loc>/g, '').trim();
-        if (u) out.push(u);
+      for (const lm of locMatches) {
+        const u = lm.replace(/<\/?loc>/g, '').trim();
+        if (u) out.push({ url: u });
       }
       if (out.length > 0) return out;
     } catch {
@@ -607,4 +884,60 @@ async function trySitemaps(baseUrl: URL): Promise<string[]> {
     }
   }
   return out;
+}
+
+// ============================================================
+// Location helpers — resolve ISO country code to a browser locale,
+// timezone, and Accept-Language value. Used by `scrapeUrl` when the
+// `location` option is set (Firecrawl-compatible).
+// ============================================================
+
+/** Map an ISO 3166-1 alpha-2 country code to a BCP-47 locale. */
+function localeForCountry(country?: string): string | undefined {
+  if (!country) return undefined;
+  const c = country.toUpperCase();
+  const map: Record<string, string> = {
+    US: 'en-US', GB: 'en-GB', AU: 'en-AU', CA: 'en-CA', IN: 'en-IN',
+    DE: 'de-DE', AT: 'de-AT', CH: 'de-CH',
+    FR: 'fr-FR', BE: 'fr-BE', CA_FR: 'fr-CA',
+    ES: 'es-ES', MX: 'es-MX', AR: 'es-AR',
+    IT: 'it-IT', PT: 'pt-PT', BR: 'pt-BR',
+    NL: 'nl-NL', SE: 'sv-SE', NO: 'nb-NO', DK: 'da-DK', FI: 'fi-FI',
+    JP: 'ja-JP', KR: 'ko-KR', CN: 'zh-CN', TW: 'zh-TW', HK: 'zh-HK',
+    RU: 'ru-RU', UA: 'uk-UA', PL: 'pl-PL', CZ: 'cs-CZ', TR: 'tr-TR',
+    AE: 'ar-AE', SA: 'ar-SA', IL: 'he-IL', TH: 'th-TH', VN: 'vi-VN',
+    ID: 'id-ID', MY: 'ms-MY', PH: 'en-PH', SG: 'en-SG',
+  };
+  return map[c];
+}
+
+/** Map an ISO 3166-1 alpha-2 country code to an IANA timezone. */
+function timezoneForCountry(country?: string): string | undefined {
+  if (!country) return undefined;
+  const c = country.toUpperCase();
+  const map: Record<string, string> = {
+    US: 'America/New_York', GB: 'Europe/London', AU: 'Australia/Sydney',
+    CA: 'America/Toronto', IN: 'Asia/Kolkata', DE: 'Europe/Berlin',
+    FR: 'Europe/Paris', ES: 'Europe/Madrid', IT: 'Europe/Rome',
+    PT: 'Europe/Lisbon', BR: 'America/Sao_Paulo', JP: 'Asia/Tokyo',
+    KR: 'Asia/Seoul', CN: 'Asia/Shanghai', TW: 'Asia/Taipei',
+    HK: 'Asia/Hong_Kong', RU: 'Europe/Moscow', UA: 'Europe/Kyiv',
+    NL: 'Europe/Amsterdam', SE: 'Europe/Stockholm', NO: 'Europe/Oslo',
+    DK: 'Europe/Copenhagen', FI: 'Europe/Helsinki', PL: 'Europe/Warsaw',
+    CZ: 'Europe/Prague', TR: 'Europe/Istanbul', AE: 'Asia/Dubai',
+    SA: 'Asia/Riyadh', IL: 'Asia/Jerusalem', TH: 'Asia/Bangkok',
+    VN: 'Asia/Ho_Chi_Minh', ID: 'Asia/Jakarta', MY: 'Asia/Kuala_Lumpur',
+    PH: 'Asia/Manila', SG: 'Asia/Singapore', MX: 'America/Mexico_City',
+    AR: 'America/Argentina/Buenos_Aires',
+  };
+  return map[c];
+}
+
+/** Map an ISO 3166-1 alpha-2 country code to an Accept-Language header. */
+function acceptLanguageForCountry(country?: string): string | undefined {
+  const loc = localeForCountry(country);
+  if (!loc) return undefined;
+  // e.g. en-US,en;q=0.9  or  ja-JP,ja;q=0.9
+  const base = loc.split('-')[0];
+  return `${loc},${base};q=0.9`;
 }

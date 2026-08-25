@@ -15,11 +15,21 @@ export async function POST(request: NextRequest) {
     return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
   }
   if (!body?.url) return jsonResponse({ success: false, error: 'Missing required field: url' }, 400);
+
+  // Firecrawl-compatible sitemap enum: 'include' | 'skip' | 'only'.
+  // We also accept legacy `ignoreSitemap: true` (maps to 'skip').
+  const sitemapEnum: 'include' | 'skip' | 'only' | undefined =
+    body.sitemap === 'include' || body.sitemap === 'skip' || body.sitemap === 'only'
+      ? body.sitemap
+      : undefined;
+
   const result = await mapUrl(body.url, {
     search: body.search,
     limit: body.limit,
+    // Pass both — the crawler resolves them in priority order.
     ignoreSitemap: body.ignoreSitemap,
-    includeSubdomains: body.includeSubdomains,
+    sitemap: sitemapEnum,
+    includeSubdomains: body.includeSubdomains ?? body.includeSubdomains ?? false,
   });
   if (!result.success) return jsonResponse({ success: false, error: result.error }, 422);
   return jsonResponse({ success: true, links: result.links });

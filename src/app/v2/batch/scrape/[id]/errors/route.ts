@@ -5,6 +5,10 @@ import { getJob } from '@/lib/crawler/store';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+/**
+ * GET /v2/batch/scrape/:id/errors — return per-URL error entries for a
+ * batch scrape job. Mirrors Firecrawl's "Get Batch Scrape Errors" endpoint.
+ */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const cors = handleCors(request);
   if (cors) return cors;
@@ -18,26 +22,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   return jsonResponse({
     success: true,
     status: job.status,
-    total: job.total,
-    completed: job.completed,
-    data: job.data,
-    errors: job.errors,
+    total: job.errors.length,
+    data: job.errors,
     expiresAt: new Date(job.expiresAt).toISOString(),
   });
-}
-
-/** Cancel a running batch scrape job (Firecrawl-compatible). */
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const cors = handleCors(request);
-  if (cors) return cors;
-  const authError = checkAuth(request);
-  if (authError) return jsonResponse({ success: false, error: authError }, 401);
-  const { id } = await params;
-  const job = getJob(id);
-  if (!job) return jsonResponse({ success: false, error: 'Batch job not found' }, 404);
-  if (job.cancel) job.cancel();
-  job.status = 'failed';
-  return jsonResponse({ success: true, status: 'cancelled' });
 }
 
 export async function OPTIONS(request: NextRequest) {

@@ -641,3 +641,283 @@ Task: Add device selector, display statusCode, update docs
 - Neutral/zinc/emerald palette preserved (with rose accent for 4xx/5xx page codes, matching the existing StatusBar failure color).
 - TypeScript strict, no `any`, no test code.
 - shadcn/ui `Select` component reused (no custom dropdown built).
+
+---
+
+## v3.8.0 — Firecrawl v2 API parity + Markdown rendering fix
+
+**Task:** Compare the API surface against https://docs.firecrawl.dev/features
+and bring the open-source runtime up to parity (without overwriting NodeByte's
+unique extensions: `device`, `cookies`, `userAgent`, `engines`, `lang`, the
+SearxNG-compatible `/search` endpoint, etc.). Also fix Markdown rendering in
+the test console and bump the version from 3.4 to 3.8.0.
+
+### Version bump (3.4 → 3.8.0)
+
+The brand UA, hero badge, footer, and `package.json` all referenced the stale
+"3.4" version. Bumped all four to "3.8.0" so logs, the UI badge, the docs page,
+and the npm package metadata agree.
+
+- `src/lib/crawler/config.ts` — UA string + comment + `version` constant.
+- `src/components/docs/hero.tsx` — hero badge text.
+- `src/components/footer.tsx` — footer version string.
+- `package.json` — `version` field (was 2.0.0; now 3.8.0).
+
+### Markdown rendering fix (test console)
+
+The `MarkdownRender` component in `src/components/test/shared.tsx` used the
+`.prose prose-zinc ...` Tailwind utility classes, but this project uses
+Tailwind v4 *without* the `@tailwindcss/typography` plugin installed — those
+`prose-*` utilities were therefore no-ops, and the markdown came back
+unstyled (headings ran together, code blocks were plain text, links were
+unstyled, lists had no markers).
+
+Two-part fix:
+
+1. **Added a self-contained `.prose` ruleset to `src/app/globals.css`.**
+   Covers headings, paragraphs, lists, code blocks, inline code, links,
+   blockquotes, tables, images, horizontal rules, `<kbd>`, `<del>`,
+   `<mark>`. Both light and dark themes are handled via `.dark .prose`
+   selectors (no JS, no plugin install needed). The styling uses oklch
+   colors and the Geist Mono font already declared by the project.
+
+2. **Simplified the `MarkdownRender` wrapper** to just `prose prose-zinc
+   max-w-none text-sm dark:prose-invert` (the `prose-*` modifiers are
+   harmless no-ops without the plugin; the `.prose` ruleset does the real
+   work). Also wired up `a` to open in a new tab with `rel="noreferrer
+   noopener"` for safety, and ensured `pre` blocks scroll horizontally.
+
+### /v2/scrape enhancements (Firecrawl v2 parity)
+
+Added Firecrawl-compatible options to `ScrapeOptions` and the `/v2/scrape`
+route, **without removing the existing NodeByte options** (`device`,
+`cookies`, `userAgent`, `removeBase64Images`, `waitForSelector`,
+`blockResources`, `maxRetries`):
+
+- **`mobile: boolean`** — Firecrawl shortcut for `device: 'mobile'`.
+- **`actions: object[]`** — up to 50 browser actions (`wait`, `click`,
+  `write`, `press`, `scroll`, `screenshot`, `pdf`, `executeJavascript`,
+  `scrape`). Captures are returned under `data.actions` (screenshots,
+  scrapes, javascriptReturns).
+- **`location: { country, languages }`** — sets the browser locale,
+  timezone, and `Accept-Language` header based on ISO 3166-1 alpha-2
+  country code. Added `localeForCountry` / `timezoneForCountry` /
+  `acceptLanguageForCountry` helpers with a 40-country map.
+- **`headers: Record<string, string>`** — custom HTTP headers merged on
+  top of the defaults (user wins).
+- **`maxAge: number`** — cache hint (accepted for compatibility; the
+  in-process crawler does not maintain a response cache yet).
+- **`screenshot` object** — `{ fullPage, quality, viewport }` applied
+  to the screenshot format OR the `screenshot` action.
+- **`attributes: Array<{ selector, attribute }>`** — extract specific
+  HTML attributes from CSS selectors; returned as `data.attributes`.
+- **`images` format** — new string format that returns an array of
+  `{ url, alt }` for every `<img>` on the page (excludes data: URIs).
+- **Object formats** — `formats` now accepts objects like
+  `{ type: "screenshot", fullPage: true }` and
+  `{ type: "attributes", selectors: [...] }`. The route parses them and
+  forwards the sub-options. AI-only object formats (json, question,
+  highlights, changeTracking, branding, product, audio, video) are
+  accepted for compatibility but not populated by the open-source
+  runtime (matching Firecrawl's "self-host without LLM service"
+  behaviour).
+
+### /v2/crawl enhancements (Firecrawl v2 parity)
+
+Updated `startCrawlJob` and the `/v2/crawl` route to accept
+Firecrawl-compatible options **without removing the existing
+`includes` / `excludes` / `maxDepth` NodeByte options**:
+
+- **`includePaths` / `excludePaths`** — Firecrawl aliases for
+  `includes` / `excludes`. Both are accepted; `includePaths` wins.
+- **`regexOnFullURL`** — match `includePaths`/`excludePaths` against
+  the full URL (with query) instead of just the pathname.
+- **`allowSubdomains`** — follow links to subdomains of the seed host.
+- **`allowExternalLinks`** — follow links to external websites (one hop;
+  their own links are NOT crawled).
+- **`crawlEntireDomain`** — explore siblings + parents; covers the
+  whole domain (paths starting at the seed host root, not just
+  descendants of the seed path).
+- **`maxDiscoveryDepth`** — Firecrawl alias for `maxDepth`.
+- **`sitemap` enum** — `"include"` (default) | `"skip"` | `"only"`.
+- **`ignoreQueryParameters`** — strip query strings before dedup.
+- **`delay`** — seconds between scrapes (polite crawling).
+- **`maxConcurrency`** — per-job concurrency cap.
+- **Limit cap raised from 50 to 10,000** (Firecrawl default). The
+  config default remains 50 to protect RAM — raise per request.
+
+Also added `errors` array to the job state so per-URL failures are
+tracked separately from successful scrapes.
+
+### /v2/map enhancements (Firecrawl v2 parity)
+
+Updated `mapUrl` and the `/v2/map` route:
+
+- **`sitemap` enum** — `"include"` (default) | `"skip"` | `"only"`.
+  The legacy `ignoreSitemap: true` is kept as an alias for `sitemap:
+  "skip"`.
+- **Rich link objects** — when the sitemap provides `<title>` /
+  `<description>` for a URL, the response carries
+  `{ url, title, description }` objects. Bare strings are returned
+  when no metadata is available, preserving backward compatibility.
+- **`search` substring filter** now matches the URL *and* the title
+  *and* the description (was URL-only).
+
+### /v2/search enhancements (Firecrawl v2 parity)
+
+Updated the `/v2/search` route **without removing the native
+`engines` array, the `lang` enum (auto/all/en/zh/ja/ko/...), or the
+SearxNG-compatible `/search` endpoint**:
+
+- **`scrapeOptions` object** — when set, scrape each search result URL
+  and merge `markdown` / `html` / `rawHtml` / `links` / `screenshot` /
+  `metadata` into each result item.
+- **`includeDomains` / `excludeDomains`** — domain filters. Internally
+  add `site:` / `-site:` operators to the query. Mutually exclusive
+  (include wins when both are set).
+- **`tbs`** — Google-style time-based search filter
+  (`qdr:d`, `qdr:w`, `qdr:m`, `qdr:y`, `sbd:1`). Forwarded as a query
+  modifier; many engines ignore it but the parameter is accepted.
+- **`safe: boolean`** — SafeSearch flag (acknowledged for
+  compatibility; the open-source engine layer does not currently
+  implement content filtering).
+- **`location`** — location hint forwarded to engines that support
+  regional filtering.
+
+### /v2/batch/scrape enhancements (Firecrawl v2 parity)
+
+- **`maxConcurrency`** — per-job concurrency cap (forwarded to
+  `startBatchJob`).
+- **`DELETE /v2/batch/scrape/:id`** — cancel a running batch scrape job.
+- **`GET /v2/batch/scrape/:id/errors`** — list per-URL failures.
+- **Batch limit raised from 100 to 1000 URLs** (Firecrawl default).
+- **`errors` array** added to the GET response.
+
+### /v2/crawl/:id/errors endpoint (new)
+
+New `GET /v2/crawl/:id/errors` route mirroring Firecrawl's "Get Crawl
+Errors" endpoint. Returns `{ success, status, total, data: [{ url,
+error }], expiresAt }` — only URLs the crawler failed to scrape (network
+errors, timeouts, robots.txt blocks).
+
+### /v2/parse endpoint (new)
+
+New `POST /v2/parse` route mirroring Firecrawl's `/parse`. Accepts a
+public document URL (PDF / DOCX / XLSX / PPTX) and returns the rendered
+content as markdown + metadata. Local file uploads are not supported by
+the open-source runtime (returns a clear 422 with an explanatory
+message); pass a public URL instead. AI-backed parser options (`pages`,
+`blocks`, `pageMarkers`) are accepted for forward compatibility.
+
+### Documentation updates
+
+- **`src/components/docs/data.ts`** — updated every endpoint definition:
+  - `/v2/scrape` — added `mobile`, `actions`, `location`, `headers`,
+    `maxAge`, `userAgent` params; expanded `formats` description with
+    object-form support.
+  - `/v2/scrape/batch` — added `maxConcurrency` param.
+  - `/v2/batch/scrape` — added `maxConcurrency`, `errors` array in
+    response, new `batch-scrape-cancel` and `batch-scrape-errors`
+    endpoint entries.
+  - `/v2/crawl` — added `includePaths`, `excludePaths`,
+    `regexOnFullURL`, `allowSubdomains`, `allowExternalLinks`,
+    `crawlEntireDomain`, `sitemap`, `ignoreQueryParameters`, `delay`,
+    `maxConcurrency`, `maxDiscoveryDepth`. New `crawl-errors` endpoint
+    entry.
+  - `/v2/map` — added `sitemap` enum, `ignoreSitemap` alias; updated
+    response example to show rich link objects.
+  - `/v2/search` — added `includeDomains`, `excludeDomains`, `tbs`,
+    `safe`, `location`, `scrapeOptions` params; response example now
+    shows `markdown` enriched field.
+  - `/v2/parse` — new endpoint entry.
+
+- **`README.md`** — full rewrite: new API surface table (with all the
+  new endpoints), scrape options reference table, batch scrape section,
+  crawl section, map section, document parsing section, search section
+  (with scrapeOptions + domain filters + tbs + safe + location), and
+  updated tech stack.
+
+### What was NOT changed (NodeByte unique features preserved)
+
+Per the task, the following NodeByte-only extensions were **kept as
+first-class options**, not folded into Firecrawl equivalents or removed:
+
+- `device: 'auto' | 'desktop' | 'mobile'` — UA + viewport + touch pool.
+- `cookies: string | CookieInput[]` — per-request cookie injection with
+  FRESH browser context isolation.
+- `userAgent: string` — custom UA override.
+- `removeBase64Images: boolean` — strip base64 inline images from markdown.
+- `waitForSelector: string` — wait for a CSS selector before extraction.
+- `blockResources: string[] | null` — block Playwright resource types.
+- `maxRetries: number` — explicit retry count (separate from the
+  exponential backoff base delay).
+- `engines: string[]` — multi-engine search array (bing, duckduckgo,
+  searxng, wikipedia, mojeek, brave, startpage).
+- `lang: 'auto' | 'all' | en | zh | ja | ko | fr | de | es | pt | ru |
+  it` — auto-detecting search language.
+- `includes` / `excludes` (crawl) — kept as NodeByte aliases alongside
+  the Firecrawl-style `includePaths` / `excludePaths`.
+- `maxDepth` (crawl) — kept as the NodeByte alias alongside
+  `maxDiscoveryDepth`.
+- The `/search?q=&format=json` SearxNG-compatible endpoint — unchanged.
+- The interactive test console + i18n (EN/ZH) + dark mode — unchanged.
+
+### Files changed
+
+- `package.json` — version 2.0.0 → 3.8.0.
+- `src/lib/crawler/config.ts` — version 3.4 → 3.8.0 (UA string + constant).
+- `src/lib/crawler/crawler.ts` — added `mobile`, `actions`, `location`,
+  `headers`, `maxAge`, `screenshot`, `attributes` options to
+  `ScrapeOptions`; added `BrowserAction` interface; added `images`,
+  `actions`, `attributes` fields to `ScrapeData`; updated `scrapeUrl`
+  to forward the new options to `attemptScrape`; updated `attemptScrape`
+  to (a) resolve location-driven locale/timezone/Accept-Language, (b)
+  run pre-scrape browser actions, (c) capture screenshots/PDFs/JS
+  returns/scrapes, (d) extract `images`, (e) extract `attributes`, (f)
+  respect the `screenshot` options object; added
+  `localeForCountry` / `timezoneForCountry` /
+  `acceptLanguageForCountry` helpers; updated `mapUrl` to accept the
+  `sitemap` enum and return rich link objects; updated `trySitemaps`
+  to also extract `<title>` / `<description>` from `<url>` blocks.
+- `src/lib/crawler/store.ts` — added `errors` array to `JobEntry`;
+  added `maxConcurrencyOverride` parameter to `startBatchJob`; updated
+  `startCrawlJob` to accept `sitemap`, `allowSubdomains`,
+  `allowExternalLinks`, `crawlEntireDomain`, `regexOnFullURL`,
+  `ignoreQueryParameters`, `delay`, `maxConcurrency`; rewrote the crawl
+  filter/scope logic to handle all the new flags.
+- `src/app/v2/scrape/route.ts` — parse object-form `formats` (screenshot
+  + attributes sub-options); forward all new options to `scrapeUrl`.
+- `src/app/v2/crawl/route.ts` — accept Firecrawl-style `includePaths`
+  / `excludePaths` / `maxDiscoveryDepth` / `sitemap` / `allowSubdomains`
+  / `allowExternalLinks` / `crawlEntireDomain` / `regexOnFullURL` /
+  `ignoreQueryParameters` / `delay` / `maxConcurrency`; raise limit cap
+  to 10000.
+- `src/app/v2/map/route.ts` — accept `sitemap` enum (and legacy
+  `ignoreSitemap` alias).
+- `src/app/v2/search/route.ts` — accept `scrapeOptions`,
+  `includeDomains`, `excludeDomains`, `tbs`, `safe`, `location`;
+  rewrite domain filters as `site:` / `-site:` query operators; when
+  `scrapeOptions` is set, scrape each result URL and merge content.
+- `src/app/v2/batch/scrape/route.ts` — accept `maxConcurrency`; raise
+  batch cap from 100 to 1000; forward to `startBatchJob`.
+- `src/app/v2/batch/scrape/[id]/route.ts` — added `errors` field to
+  GET response; added `DELETE` handler for cancel.
+- `src/app/v2/crawl/[id]/route.ts` — added `errors` field to GET
+  response (DELETE was already present).
+- `src/app/v2/crawl/[id]/errors/route.ts` — new file. GET handler for
+  per-URL crawl errors.
+- `src/app/v2/batch/scrape/[id]/errors/route.ts` — new file. GET
+  handler for per-URL batch errors.
+- `src/app/v2/parse/route.ts` — new file. POST handler for document
+  parsing (delegates to the scraper for URL-based documents).
+- `src/components/docs/hero.tsx` — version badge 3.4 → 3.8.0.
+- `src/components/footer.tsx` — version string 3.4 → 3.8.0.
+- `src/components/docs/data.ts` — updated every endpoint definition
+  (see "Documentation updates" above).
+- `src/components/test/shared.tsx` — `MarkdownRender` simplified to
+  use the new `.prose` CSS ruleset; wired up `a` to open in a new tab.
+- `src/app/globals.css` — added `.prose` ruleset (light + dark) for
+  headings, paragraphs, lists, code, tables, links, blockquotes,
+  images, hr, kbd, del, mark.
+- `README.md` — full rewrite with the new API surface and feature
+  tables.
