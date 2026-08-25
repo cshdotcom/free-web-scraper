@@ -498,6 +498,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         description: 'Sitemap recursion depth (0-10). When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows sitemapindex files up to this depth. 0 disables recursion. No manual sitemap path required.',
       },
       {
+        name: 'sitemapPath',
+        type: 'string',
+        required: false,
+        default: '—',
+        description: 'Explicit sitemap URL or link-list page URL. When provided, the crawler fetches this URL and auto-detects: XML sitemap (sitemapindex or urlset) → parse as sitemap with recursion up to sitemapDepth; HTML page → extract all <a href> links using this path\'s directory as the base URL (e.g. https://example.com/path/ resolves ./post-1.html → https://example.com/path/post-1.html). Auto-discovery (robots.txt + common paths) is skipped when sitemapPath produces URLs. Accepts absolute URLs (https://...) or relative paths (resolved against the seed URL).',
+      },
+      {
         name: 'ignoreRobotsTxt',
         type: 'boolean',
         required: false,

@@ -85,6 +85,7 @@ export function CrawlTab() {
   // 'only' = ONLY use sitemap URLs; no on-page link following.
   const [sitemap, setSitemap] = React.useState<'include' | 'skip' | 'only'>('include');
   const [sitemapDepth, setSitemapDepth] = React.useState(3);
+  const [sitemapPath, setSitemapPath] = React.useState('');
   const [allowSubdomains, setAllowSubdomains] = React.useState(false);
   const [crawlEntireDomain, setCrawlEntireDomain] = React.useState(false);
   const [ignoreQueryParams, setIgnoreQueryParams] = React.useState(false);
@@ -169,6 +170,7 @@ export function CrawlTab() {
       sitemapDepth,
       scrapeOptions: { formats: selectedFormats, onlyMainContent: true, device },
     };
+    if (sitemapPath.trim()) body.sitemapPath = sitemapPath.trim();
     // Firecrawl-compatible path-filter aliases.
     const inc = includes.split(',').map((s) => s.trim()).filter(Boolean);
     const exc = excludes.split(',').map((s) => s.trim()).filter(Boolean);
@@ -375,6 +377,23 @@ export function CrawlTab() {
               onChange={(e) => setSitemapDepth(Math.max(0, Math.min(10, Number(e.target.value) || 0)))}
               disabled={!!jobId || sitemap === 'skip'}
             />
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="crawl-sitemap-path" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Sitemap path (auto-detect: sitemap XML or HTML link list)
+            </Label>
+            <Input
+              id="crawl-sitemap-path"
+              type="text"
+              placeholder="https://example.com/sitemap.xml  OR  /blog/  (HTML link list page)"
+              value={sitemapPath}
+              onChange={(e) => setSitemapPath(e.target.value)}
+              className="font-mono text-xs"
+              disabled={!!jobId || sitemap === 'skip'}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              When set, the crawler fetches this URL and auto-detects: XML sitemap → parse as sitemap; HTML page → extract all &lt;a href&gt; links using this path&apos;s directory as the base URL. Auto-discovery (robots.txt + common paths) is skipped.
+            </p>
           </div>
           <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div>

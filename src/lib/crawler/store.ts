@@ -290,6 +290,13 @@ export function startCrawlJob(
     /** Sitemap recursion depth (how deep to follow sitemapindex files).
      *  Default 3, max 10. */
     sitemapDepth?: number;
+    /** Explicit sitemap URL or link-list page URL. When provided, we
+     *  fetch it and auto-detect: XML sitemap → parse as sitemap (with
+     *  recursion); HTML page → extract all <a href> links, using
+     *  sitemapPath's directory as the base URL. Auto-discovery
+     *  (robots.txt + common paths) is skipped when sitemapPath
+     *  produces URLs. */
+    sitemapPath?: string;
     /** Follow subdomains of the seed host. */
     allowSubdomains?: boolean;
     /** Follow external links one hop. */
@@ -408,6 +415,7 @@ export function startCrawlJob(
         const smResult = await discoverSitemaps(seedUrl, ua, {
           depth: opts.sitemapDepth ?? 3,
           skipRobots: false,
+          sitemapPath: opts.sitemapPath,
         });
         // Seed the queue with sitemap-discovered URLs that pass the
         // scope + filter checks. Sitemap URLs are at depth 0 (same

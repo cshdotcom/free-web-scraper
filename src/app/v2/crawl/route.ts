@@ -51,10 +51,24 @@ export async function POST(request: NextRequest) {
   // Default 3, max 10. Frontend + API both expose this.
   const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 3, 0), 10);
 
+  // Explicit sitemap path (URL or relative path). When provided, the
+  // crawler fetches this URL and auto-detects:
+  //   - XML sitemap (sitemapindex or urlset) → parse as sitemap
+  //   - HTML page → extract all <a href> links, using sitemapPath's
+  //     directory as the base URL (e.g. https://example.com/path/
+  //     resolves ./post-1.html → https://example.com/path/post-1.html)
+  // When sitemapPath produces URLs, auto-discovery (robots.txt +
+  // common paths) is skipped — the user has explicitly told us
+  // where to find URLs.
+  const sitemapPath: string | undefined = typeof body.sitemapPath === 'string' && body.sitemapPath.trim()
+    ? body.sitemapPath.trim()
+    : undefined;
+
   // Strip out route-level fields so they don't leak into scrapeOpts.
   const {
     urls: _u, url: _url, limit: _l, maxDepth: _md, maxDiscoveryDepth: _mdd,
     includes: _inc, excludes: _exc, includePaths: _ip, excludePaths: _ep,
+    sitemapPath: _smPath, sitemapDepth: _smDepth,
     scrapeOptions, ...restScrapeOpts
   } = body;
   const scrapeOpts = { ...(scrapeOptions || {}), ...restScrapeOpts };
@@ -67,6 +81,7 @@ export async function POST(request: NextRequest) {
     scrapeOpts,
     sitemap,
     sitemapDepth,
+    sitemapPath,
     allowSubdomains: body.allowSubdomains ?? false,
     allowExternalLinks: body.allowExternalLinks ?? false,
     crawlEntireDomain: body.crawlEntireDomain ?? false,
