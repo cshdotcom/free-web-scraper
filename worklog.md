@@ -921,3 +921,76 @@ first-class options**, not folded into Firecrawl equivalents or removed:
   images, hr, kbd, del, mark.
 - `README.md` — full rewrite with the new API surface and feature
   tables.
+
+---
+
+## v3.8.0 — Test verification (2026-08-25, post-release)
+
+After pushing the v3.8.0 tag, the runtime was started locally using the
+fullstack-dev environment and a 48-test API feature suite was run against
+the live server. **All 48 tests passed.**
+
+### Bugfix discovered during testing
+
+The `/v2/scrape` `attributes` format (object-form
+`{"type":"attributes","selectors":[...]}`) failed silently in this Next.js
+16 + Turbopack environment. The Playwright `page.evaluate` call passed
+`spec.selector` and `spec.attribute` as positional arguments:
+
+```ts
+out[key] = await page.evaluate((sel, attr) => { ... }, spec.selector, spec.attribute);
+```
+
+Turbopack rejects this with the error: *“Too many arguments. If you need
+to pass more than 1 argument to the function wrap them in an object.”*
+
+**Fix:** wrapped the selector + attribute in a single `{ sel, attr }` object:
+
+```ts
+const result = await page.evaluate(({ sel, attr }) => { ... }, { sel: spec.selector, attr: spec.attribute });
+```
+
+Also extended the in-page extractor to recognise `textContent`,
+`innerHTML`, and `outerHTML` as attribute names (Firecrawl's documented
+behaviour), since these are properties, not real HTML attributes, and
+would otherwise return `null` from `getAttribute`.
+
+### What was verified working end-to-end
+
+- `GET /api/status` returns `version: "3.8.0"`.
+- `POST /v2/scrape` with all four string formats (`markdown`, `html`,
+  `rawHtml`, `links`, `images`).
+- `POST /v2/scrape` with `mobile`, `location`, `headers`, `maxAge`,
+  `userAgent`, `cookies`, `device` options.
+- `POST /v2/scrape` with `actions` array — `wait`, `screenshot`,
+  `executeJavascript` — capturing `data.actions.screenshots` and
+  `data.actions.javascriptReturns`.
+- `POST /v2/scrape` with object-form `{"type":"screenshot",...}` and
+  `{"type":"attributes","selectors":[...]}` formats.
+- `POST /v2/scrape/batch` synchronous (multiple URLs).
+- `POST /v2/batch/scrape` async with `maxConcurrency`, polled via
+  `GET /v2/batch/scrape/:id` to `completed`, including `errors` array.
+- `GET /v2/batch/scrape/:id/errors` for per-URL failures.
+- `POST /v2/crawl` with `includePaths`, `maxDiscoveryDepth`,
+  `allowSubdomains`, `crawlEntireDomain`, `sitemap`, `ignoreQueryParameters`.
+- `GET /v2/crawl/:id` polls to `completed` with `errors` array.
+- `GET /v2/crawl/:id/errors` for per-URL failures.
+- `POST /v2/map` with `sitemap: "include"` / `"skip"` and the legacy
+  `ignoreSitemap: true` alias. Returns rich link objects when the sitemap
+  provides them.
+- `POST /v2/search` with `includeDomains`, `tbs`, `safe`, `scrapeOptions`.
+- `POST /v2/parse` on a public URL (returns markdown + metadata).
+- `POST /v2/parse` with multipart `file=@...` upload returns a clear
+  422 explaining local uploads aren't supported by the open-source runtime.
+- `GET /search?q=&format=json` SearxNG-compatible endpoint still works.
+- `POST /v1/scrape` (v1 back-compat) still works.
+
+### Preserved NodeByte extensions (verified NOT broken by the v2 parity work)
+
+- `device: 'auto' | 'desktop' | 'mobile'` — UA + viewport + touch pool.
+- `cookies: string | CookieInput[]` — per-request cookie injection.
+- `userAgent: string` — custom UA override.
+- `engines: string[]` — multi-engine search array.
+- `lang: 'auto' | 'all' | en | zh | ja | ...` — auto-detecting search
+  language.
+- The `/search?q=&format=json` SearxNG-compatible endpoint.
