@@ -177,11 +177,31 @@ export function CopyButton({ value, label }: { value: string; label?: string }) 
   );
 }
 
-/** Render the page response markdown via react-markdown. */
+/** Render the page response markdown via react-markdown.
+ *
+ * Styling is provided by the `.prose` CSS rules in src/app/globals.css.
+ * Tailwind v4 does not include the @tailwindcss/typography plugin in
+ * this project, so we ship our own minimal typography ruleset that
+ * supports light + dark themes. The prose-* utility classes below are
+ * no-ops without the plugin, so they are kept only as hints for any
+ * future plugin installation. */
 export function MarkdownRender({ source }: { source: string }) {
   return (
-    <div className="prose prose-zinc max-w-none text-sm dark:prose-invert prose-headings:font-semibold prose-headings:tracking-tight prose-a:text-emerald-600 dark:prose-a:text-emerald-400 prose-code:rounded prose-code:bg-zinc-100 prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-zinc-800">
-      <ReactMarkdown>{source}</ReactMarkdown>
+    <div className="prose prose-zinc max-w-none text-sm dark:prose-invert">
+      <ReactMarkdown
+        components={{
+          // Open links in a new tab safely
+          a: ({ children, href }) => (
+            <a href={href} target="_blank" rel="noreferrer noopener">
+              {children}
+            </a>
+          ),
+          // Render code blocks with a wrapper for horizontal scroll
+          pre: ({ children }) => <pre>{children}</pre>,
+        }}
+      >
+        {source}
+      </ReactMarkdown>
     </div>
   );
 }

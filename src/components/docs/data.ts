@@ -37,19 +37,21 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     id: 'scrape',
     method: 'POST',
     path: '/v2/scrape',
-    summary: 'Scrape a single URL → markdown/html/links/screenshot.',
+    summary: 'Scrape a single URL → markdown/html/links/images/screenshot.',
     description:
       'Renders the page with a headless Chromium, waits for network idle, ' +
       'then returns the content in any combination of formats. Use this for ' +
-      'one-off scrapes where you need clean, JS-rendered output.',
+      'one-off scrapes where you need clean, JS-rendered output. Supports ' +
+      'browser actions (click / type / wait / screenshot / pdf / executeJavascript), ' +
+      'location + custom headers, and the mobile shortcut. Firecrawl v2 compatible.',
     params: [
       { name: 'url', type: 'string', required: true, description: 'Absolute URL to scrape.' },
       {
         name: 'formats',
-        type: 'string[]',
+        type: 'string[] | object[]',
         required: false,
         default: '["markdown"]',
-        description: 'Output formats. One or more of: markdown, html, rawHtml, links, screenshot.',
+        description: 'Output formats. Strings: markdown, html, rawHtml, links, images, screenshot. Objects: { type: "screenshot", fullPage?, quality?, viewport? }, { type: "attributes", selectors: [{selector, attribute}] }. AI-only formats (json, question, highlights, summary, branding, product, audio, video) are accepted for compatibility but require an external LLM service to populate.',
       },
       {
         name: 'onlyMainContent',
@@ -77,7 +79,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'number',
         required: false,
         default: '45000',
-        description: 'Navigation timeout (ms).',
+        description: 'Navigation timeout (ms). Minimum 1000.',
       },
       {
         name: 'waitFor',
@@ -98,25 +100,68 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'string',
         required: false,
         default: 'auto',
-        description: "Device emulation: 'auto' (random desktop/mobile), 'desktop', or 'mobile'. Picks matching UA + viewport.",
+        description: "Device emulation (NodeByte extension): 'auto' (random desktop/mobile), 'desktop', or 'mobile'. Picks matching UA + viewport + touch.",
+      },
+      {
+        name: 'mobile',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: "Firecrawl shortcut for device: 'mobile'. Ignored when `device` is explicitly set.",
       },
       {
         name: 'cookies',
         type: 'string | CookieInput[]',
         required: false,
         default: '—',
-        description: 'Cookies to inject before navigation. Accepts a string "name=value; name2=value2" or an array [{name,value,domain?,path?,httpOnly?,secure?,sameSite?}]. Each request gets a FRESH browser context — cookies are ONLY used for this request and discarded immediately. Not persisted.',
+        description: 'Cookies to inject before navigation (NodeByte extension). Accepts a string "name=value; name2=value2" or an array [{name,value,domain?,path?,httpOnly?,secure?,sameSite?}]. Each request gets a FRESH browser context — cookies are ONLY used for this request and discarded immediately. Not persisted.',
+      },
+      {
+        name: 'userAgent',
+        type: 'string',
+        required: false,
+        default: '—',
+        description: 'Custom User-Agent override (NodeByte extension). Takes precedence over `device` and `mobile`.',
+      },
+      {
+        name: 'actions',
+        type: 'object[]',
+        required: false,
+        default: '[]',
+        description: 'Browser actions to run before scraping. Each entry: { type, ... }. Supported types: wait (milliseconds|selector), click (selector, all?), write (text), press (key), scroll (direction?, selector?), screenshot (fullPage?, quality?, viewport?), pdf (format?, landscape?, scale?), executeJavascript (script), scrape. Up to 50 actions.',
+      },
+      {
+        name: 'location',
+        type: 'object',
+        required: false,
+        default: '—',
+        description: 'Location object: { country?: string (ISO 3166-1 alpha-2), languages?: string[] }. When set, configures the browser locale + timezone + Accept-Language header to match the target region.',
+      },
+      {
+        name: 'headers',
+        type: 'object',
+        required: false,
+        default: '{}',
+        description: 'Custom HTTP headers to send with the navigation request. Merged on top of the defaults; user-supplied values override defaults.',
+      },
+      {
+        name: 'maxAge',
+        type: 'number',
+        required: false,
+        default: '0',
+        description: 'Cache hint in ms (Firecrawl-compatible). Currently informational — the in-process crawler does not maintain a response cache, but the parameter is accepted for API compatibility.',
       },
     ],
     requestExample: JSON.stringify(
       {
         url: 'https://example.com',
-        formats: ['markdown', 'html', 'links'],
+        formats: ['markdown', 'html', 'links', 'images'],
         onlyMainContent: true,
         timeout: 45000,
         maxRetries: 2,
         device: 'auto',
         cookies: 'session=abc123; token=xyz789',
+        location: { country: 'US', languages: ['en'] },
       },
       null,
       2,
@@ -128,6 +173,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
           markdown: '# Example Domain\n\nExample Domains...',
           html: '<html><body>...</body></html>',
           links: ['https://www.iana.org/domains/example'],
+          images: [{ url: 'https://example.com/logo.png', alt: 'Logo' }],
           metadata: {
             title: 'Example Domain',
             description: 'Example domain',
@@ -211,9 +257,11 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     summary: 'Start an async batch job (returns immediately).',
     description:
       'Submit a large batch and get back a job id. Poll GET /v2/batch/scrape/:id ' +
-      'until status is "completed". Results are kept for 30 minutes after completion.',
+      'until status is "completed". Cancel with DELETE /v2/batch/scrape/:id. ' +
+      'Inspect failures with GET /v2/batch/scrape/:id/errors. Results are kept ' +
+      'for 30 minutes after completion. Firecrawl v2 compatible.',
     params: [
-      { name: 'urls', type: 'string[]', required: true, description: 'List of absolute URLs.' },
+      { name: 'urls', type: 'string[]', required: true, description: 'List of absolute URLs (max 1000 per batch).' },
       {
         name: 'formats',
         type: 'string[]',
@@ -232,11 +280,19 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
       { name: 'excludeTags', type: 'string[]', required: false, default: '[]', description: 'Same as /v2/scrape.' },
       { name: 'timeout', type: 'number', required: false, default: '45000', description: 'Per-URL timeout (ms).' },
       { name: 'maxRetries', type: 'number', required: false, default: '2', description: 'Per-URL retry count.' },
+      {
+        name: 'maxConcurrency',
+        type: 'number',
+        required: false,
+        default: '—',
+        description: 'Per-job concurrency cap (Firecrawl-compatible). When omitted, the job uses the default background concurrency from config.',
+      },
     ],
     requestExample: JSON.stringify(
       {
         urls: ['https://example.com', 'https://example.org', 'https://example.net'],
         formats: ['markdown'],
+        maxConcurrency: 8,
       },
       null,
       2,
@@ -258,7 +314,8 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     summary: 'Poll an async batch job.',
     description:
       'Returns current status, completed/total counts, and (when complete) the ' +
-      'scraped results for every URL in the batch. Safe to poll every 2 seconds.',
+      'scraped results for every URL in the batch. Safe to poll every 2 seconds. ' +
+      'Includes an `errors` array of per-URL failures.',
     params: [
       { name: 'id', type: 'string', required: true, description: 'Batch job id (returned by POST /v2/batch/scrape).' },
     ],
@@ -277,6 +334,45 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
             data: { markdown: '# Example Domain\n\n...', metadata: { title: 'Example Domain', statusCode: 200 }, statusCode: 200 },
           },
         ],
+        errors: [],
+        expiresAt: '2025-01-01T12:30:00.000Z',
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    id: 'batch-scrape-cancel',
+    method: 'DELETE',
+    path: '/v2/batch/scrape/:id',
+    summary: 'Cancel a running batch scrape job (Firecrawl-compatible).',
+    description:
+      'Marks the batch as cancelled. Any in-flight page renders finish, but ' +
+      'no new ones start. Subsequent polls return status: "cancelled".',
+    params: [
+      { name: 'id', type: 'string', required: true, description: 'Batch job id to cancel.' },
+    ],
+    requestExample: '// DELETE /v2/batch/scrape/batch_01HFQ...',
+    responseExample: JSON.stringify({ success: true, id: 'batch_01HFQ...', status: 'cancelled' }, null, 2),
+  },
+  {
+    id: 'batch-scrape-errors',
+    method: 'GET',
+    path: '/v2/batch/scrape/:id/errors',
+    summary: 'List per-URL errors for a batch scrape job (Firecrawl-compatible).',
+    description:
+      'Returns the list of URLs that the crawler failed to scrape. Successfully ' +
+      'scraped pages are in the main batch response, not here.',
+    params: [
+      { name: 'id', type: 'string', required: true, description: 'Batch job id.' },
+    ],
+    requestExample: '// GET /v2/batch/scrape/batch_01HFQ.../errors',
+    responseExample: JSON.stringify(
+      {
+        success: true,
+        status: 'completed',
+        total: 0,
+        data: [],
         expiresAt: '2025-01-01T12:30:00.000Z',
       },
       null,
@@ -289,9 +385,11 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     path: '/v2/crawl',
     summary: 'Start a BFS recursive crawl.',
     description:
-      'Crawls a seed URL up to maxDepth levels deep, following same-origin links. ' +
-      'Use includes/excludes to constrain the URL pattern. Returns a job id; poll ' +
-      'GET /v2/crawl/:id for progress and results. Cancel with DELETE /v2/crawl/:id.',
+      'Crawls a seed URL up to maxDepth levels deep, following same-origin links ' +
+      '(or subdomain / external links when opted in). Use includePaths/excludePaths ' +
+      'to constrain the URL pattern. Returns a job id; poll GET /v2/crawl/:id for ' +
+      'progress and results. Cancel with DELETE /v2/crawl/:id. Inspect failures ' +
+      'with GET /v2/crawl/:id/errors. Firecrawl v2 compatible.',
     params: [
       { name: 'url', type: 'string', required: true, description: 'Seed URL.' },
       {
@@ -299,35 +397,105 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'number',
         required: false,
         default: '2',
-        description: 'BFS recursion depth (1–5). 1 = only the seed page.',
+        description: 'BFS recursion depth (1–5). 1 = only the seed page. Alias: maxDiscoveryDepth.',
       },
       {
         name: 'limit',
         type: 'number',
         required: false,
-        default: '20',
-        description: 'Maximum pages to scrape.',
+        default: '50',
+        description: 'Maximum pages to scrape. Cap: 10,000 (Firecrawl default). The config default is 50 to protect RAM — raise per request if needed.',
       },
       {
         name: 'includes',
         type: 'string[]',
         required: false,
         default: '[]',
-        description: 'Glob patterns that URLs must match to be crawled (e.g. ["*/docs/*"]).',
+        description: 'Glob patterns that URLs must match to be crawled (NodeByte alias). e.g. ["*/docs/*"].',
       },
       {
         name: 'excludes',
         type: 'string[]',
         required: false,
         default: '[]',
-        description: 'Glob patterns to skip (e.g. ["*/login/*","*/archive/*"]).',
+        description: 'Glob patterns to skip (NodeByte alias). e.g. ["*/login/*","*/archive/*"].',
+      },
+      {
+        name: 'includePaths',
+        type: 'string[]',
+        required: false,
+        default: '[]',
+        description: 'Firecrawl alias for `includes`. Regex patterns for URL paths to include.',
+      },
+      {
+        name: 'excludePaths',
+        type: 'string[]',
+        required: false,
+        default: '[]',
+        description: 'Firecrawl alias for `excludes`. Regex patterns for URL paths to exclude.',
+      },
+      {
+        name: 'regexOnFullURL',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Match includePaths/excludePaths against the full URL (including query) instead of just the pathname.',
+      },
+      {
+        name: 'allowSubdomains',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Follow links to subdomains of the seed host.',
+      },
+      {
+        name: 'allowExternalLinks',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Follow links to external websites. External links are followed one hop (their own links are NOT crawled).',
+      },
+      {
+        name: 'crawlEntireDomain',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Explore siblings + parents — covers the entire domain, not just descendants of the seed path.',
+      },
+      {
+        name: 'sitemap',
+        type: 'string',
+        required: false,
+        default: '"include"',
+        description: 'Sitemap handling: "include" (default, use sitemap + link discovery), "skip" (ignore sitemap), "only" (sitemap URLs only).',
+      },
+      {
+        name: 'ignoreQueryParameters',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Strip query parameters before deduplication (so /page?a=1 and /page?a=2 count as one URL).',
+      },
+      {
+        name: 'delay',
+        type: 'number',
+        required: false,
+        default: '—',
+        description: 'Seconds between scrapes (polite crawling).',
+      },
+      {
+        name: 'maxConcurrency',
+        type: 'number',
+        required: false,
+        default: '—',
+        description: 'Per-job concurrency cap. When omitted, the job uses the default background concurrency.',
       },
       {
         name: 'scrapeOptions',
         type: 'object',
         required: false,
         default: '{ formats: ["markdown"], onlyMainContent: true, device: "auto" }',
-        description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, cookies (string or array, isolated per request), includeTags, excludeTags, timeout, waitFor, maxRetries.',
+        description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, mobile, cookies (string or array, isolated per request), userAgent, actions, location, headers, includeTags, excludeTags, timeout, waitFor, maxRetries.',
       },
     ],
     requestExample: JSON.stringify(
@@ -335,9 +503,11 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         url: 'https://example.com',
         maxDepth: 2,
         limit: 20,
-        includes: ['*'],
-        excludes: ['*/login/*', '*/admin/*'],
-        scrapeOptions: { formats: ['markdown'], onlyMainContent: true },
+        includePaths: ['^/blog/.*$', '^/docs/.*$'],
+        excludePaths: ['^/admin/.*$'],
+        allowSubdomains: true,
+        sitemap: 'include',
+        scrapeOptions: { formats: ['markdown'], onlyMainContent: true, device: 'desktop' },
       },
       null,
       2,
@@ -359,7 +529,9 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     summary: 'Poll a crawl job.',
     description:
       'Returns the crawl status, completed/total counts, and the scraped pages ' +
-      'when complete. Poll every 2 seconds until status === "completed".',
+      'when complete. Poll every 2 seconds until status === "completed". ' +
+      'The `errors` array contains per-URL failures (network errors, timeouts, ' +
+      'robots.txt blocks). For a focused error-only view, use GET /v2/crawl/:id/errors.',
     params: [
       { name: 'id', type: 'string', required: true, description: 'Crawl job id.' },
     ],
@@ -383,6 +555,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
             },
           },
         ],
+        errors: [],
         expiresAt: '2025-01-01T12:30:00.000Z',
       },
       null,
@@ -404,6 +577,31 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     responseExample: JSON.stringify({ success: true, id: 'crawl_01HFQ...', status: 'cancelled' }, null, 2),
   },
   {
+    id: 'crawl-errors',
+    method: 'GET',
+    path: '/v2/crawl/:id/errors',
+    summary: 'List per-URL errors for a crawl job (Firecrawl-compatible).',
+    description:
+      'Returns the list of URLs that the crawler failed to scrape (network ' +
+      'errors, timeouts, robots.txt blocks). Successfully scraped pages are ' +
+      'in the main crawl response, not here.',
+    params: [
+      { name: 'id', type: 'string', required: true, description: 'Crawl job id.' },
+    ],
+    requestExample: '// GET /v2/crawl/crawl_01HFQ.../errors',
+    responseExample: JSON.stringify(
+      {
+        success: true,
+        status: 'completed',
+        total: 0,
+        data: [],
+        expiresAt: '2025-01-01T12:30:00.000Z',
+      },
+      null,
+      2,
+    ),
+  },
+  {
     id: 'map',
     method: 'POST',
     path: '/v2/map',
@@ -411,7 +609,10 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     description:
       'Fast link-discovery pass: renders the seed page, extracts every <a href>, ' +
       'optionally filters by substring and includes subdomains. Much cheaper ' +
-      'than a crawl when you just want the URL list.',
+      'than a crawl when you just want the URL list. Firecrawl v2 compatible — ' +
+      'supports the `sitemap` enum (include | skip | only) and returns link ' +
+      'objects with `url`, `title`, and `description` when those fields are ' +
+      'available in the sitemap.',
     params: [
       { name: 'url', type: 'string', required: true, description: 'Seed URL.' },
       {
@@ -419,7 +620,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'string',
         required: false,
         default: '""',
-        description: 'Substring filter; only links containing this string are returned.',
+        description: 'Substring filter; only links containing this string are returned. Matched against the URL, title, and description.',
       },
       {
         name: 'limit',
@@ -435,9 +636,23 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         default: 'false',
         description: 'Include links on subdomains of the seed host.',
       },
+      {
+        name: 'sitemap',
+        type: 'string',
+        required: false,
+        default: '"include"',
+        description: 'Sitemap handling: "include" (default, use sitemap + on-page links), "skip" (ignore sitemap), "only" (sitemap URLs only).',
+      },
+      {
+        name: 'ignoreSitemap',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Legacy alias for sitemap: "skip". Kept for backward compatibility.',
+      },
     ],
     requestExample: JSON.stringify(
-      { url: 'https://example.com', search: 'docs', limit: 50, includeSubdomains: false },
+      { url: 'https://example.com', search: 'docs', limit: 50, includeSubdomains: false, sitemap: 'include' },
       null,
       2,
     ),
@@ -445,9 +660,9 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
       {
         success: true,
         links: [
-          'https://example.com/docs/intro',
-          'https://example.com/docs/api',
-          'https://example.com/docs/guides',
+          { url: 'https://example.com/docs/intro', title: 'Intro', description: 'Getting started' },
+          { url: 'https://example.com/docs/api', title: 'API', description: 'API reference' },
+          { url: 'https://example.com/docs/guides' },
         ],
       },
       null,
@@ -462,7 +677,10 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
     description:
       'Query Bing + DuckDuckGo + Brave + Mojeek + Startpage in parallel. ' +
       'Engine failures are tolerated — one blocked engine does not break the ' +
-      'request. Results are merged, deduplicated, and ranked by score.',
+      'request. Results are merged, deduplicated, and ranked by score. ' +
+      'Supports Firecrawl-compatible `scrapeOptions` (scrape each result), ' +
+      '`includeDomains` / `excludeDomains` (filter by domain), `tbs` ' +
+      '(time-based search), `safe`, and `location`.',
     params: [
       { name: 'query', type: 'string', required: true, description: 'Search query.' },
       {
@@ -477,7 +695,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'string[]',
         required: false,
         default: '["bing","duckduckgo","brave","mojeek","startpage"]',
-        description: 'Which engines to query. Subset of the default pool.',
+        description: 'Which engines to query. Subset of the default pool. (NodeByte extension.)',
       },
       {
         name: 'lang',
@@ -485,11 +703,60 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         required: false,
         default: 'auto',
         description:
-          "Search language: 'auto' (detect query lang), 'all' (mixed), or ISO code (en, zh, ja, ko, fr, de, es, pt, ru, it).",
+          "Search language (NodeByte extension): 'auto' (detect query lang), 'all' (mixed), or ISO code (en, zh, ja, ko, fr, de, es, pt, ru, it).",
+      },
+      {
+        name: 'includeDomains',
+        type: 'string[]',
+        required: false,
+        default: '[]',
+        description: 'Restrict results to these domains. Internally adds `site:` operators. Mutually exclusive with excludeDomains (include wins).',
+      },
+      {
+        name: 'excludeDomains',
+        type: 'string[]',
+        required: false,
+        default: '[]',
+        description: 'Remove these domains from results. Internally adds `-site:` operators.',
+      },
+      {
+        name: 'tbs',
+        type: 'string',
+        required: false,
+        default: '""',
+        description: 'Time-based search filter (Google-style): "qdr:d" (past day), "qdr:w" (past week), "qdr:m" (past month), "qdr:y" (past year), "sbd:1" (sort by date).',
+      },
+      {
+        name: 'safe',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Filter explicit content (SafeSearch). Acknowledged for compatibility — the open-source engine layer does not currently implement SafeSearch.',
+      },
+      {
+        name: 'location',
+        type: 'string',
+        required: false,
+        default: '—',
+        description: 'Location hint (string). Forwarded to engines that support regional filtering.',
+      },
+      {
+        name: 'scrapeOptions',
+        type: 'object',
+        required: false,
+        default: '—',
+        description: 'When set, scrape each search result URL with these options and merge the content (markdown, html, links, screenshot, metadata) into each result. Accepts the same fields as /v2/scrape (formats, onlyMainContent, timeout, location).',
       },
     ],
     requestExample: JSON.stringify(
-      { query: 'best rust web framework', limit: 10, engines: ['bing', 'duckduckgo', 'brave'], lang: 'auto' },
+      {
+        query: 'best rust web framework',
+        limit: 10,
+        engines: ['bing', 'duckduckgo', 'brave'],
+        lang: 'auto',
+        includeDomains: ['github.com', 'docs.rs'],
+        scrapeOptions: { formats: ['markdown'] },
+      },
       null,
       2,
     ),
@@ -500,6 +767,7 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         total: 10,
         engines: ['bing', 'duckduckgo', 'brave'],
         lang: 'en',
+        safe: false,
         data: [
           {
             url: 'https://example.com/rust-web',
@@ -509,8 +777,49 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
             engine: 'bing',
             engines: ['bing', 'duckduckgo'],
             score: 2.5,
+            markdown: '# Best Rust Web Frameworks in 2025\n\n...',
           },
         ],
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    id: 'parse',
+    method: 'POST',
+    path: '/v2/parse',
+    summary: 'Parse a document at a URL into markdown (Firecrawl-compatible).',
+    description:
+      'Document parsing endpoint. Accepts a public `url` pointing at a ' +
+      'PDF / DOCX / XLSX / PPTX file and returns the rendered content as ' +
+      'markdown + metadata. Local file uploads are not supported by the ' +
+      'open-source runtime — pass a public URL instead. AI-backed parser ' +
+      'options (pages, blocks, pageMarkers) are accepted for forward ' +
+      'compatibility but not yet implemented.',
+    params: [
+      { name: 'url', type: 'string', required: true, description: 'Public URL of the document to parse.' },
+      { name: 'formats', type: 'string[]', required: false, default: '["markdown"]', description: 'Output formats. Currently supports markdown, html.' },
+    ],
+    requestExample: JSON.stringify(
+      {
+        url: 'https://example.com/report.pdf',
+        formats: ['markdown'],
+      },
+      null,
+      2,
+    ),
+    responseExample: JSON.stringify(
+      {
+        success: true,
+        data: {
+          markdown: '# Annual Report\n\n...',
+          metadata: {
+            title: 'Annual Report',
+            sourceFile: 'report.pdf',
+            sourceURL: 'https://example.com/report.pdf',
+          },
+        },
       },
       null,
       2,

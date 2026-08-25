@@ -19,7 +19,7 @@ export function Footer() {
           </span>
         </div>
         <span className="text-muted-foreground/70">
-          v3.4 · Powered by Playwright + Hono
+          v3.8.0 · Powered by Playwright + Hono
         </span>
       </div>
     </footer>

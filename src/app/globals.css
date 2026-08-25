@@ -116,3 +116,298 @@
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background text-foreground; }
 }
+
+/* ============================================================
+ * Markdown rendering styles (.prose)
+ *
+ * Tailwind v4 does not include the @tailwindcss/typography plugin
+ * in this project, so we provide a self-contained set of styles
+ * for the `.prose` class used by the MarkdownRender component.
+ * These cover headings, paragraphs, lists, code, tables, links,
+ * blockquotes, images, and horizontal rules. Light + dark themes
+ * are both handled via the `:where(.dark)` selector.
+ * ============================================================ */
+@layer components {
+  .prose {
+    color: oklch(0.27 0 0);
+    line-height: 1.7;
+    font-size: 0.875rem;
+    max-width: 65ch;
+    word-wrap: break-word;
+  }
+  .dark .prose {
+    color: oklch(0.85 0 0);
+  }
+
+  /* Headings */
+  .prose :where(h1) {
+    font-size: 1.875rem;
+    font-weight: 700;
+    margin-top: 0;
+    margin-bottom: 0.8889em;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    color: oklch(0.18 0 0);
+  }
+  .dark .prose :where(h1) { color: oklch(0.96 0 0); }
+
+  .prose :where(h2) {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 1.6em;
+    margin-bottom: 0.6em;
+    line-height: 1.2;
+    letter-spacing: -0.005em;
+    color: oklch(0.18 0 0);
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid oklch(0.92 0 0);
+  }
+  .dark .prose :where(h2) {
+    color: oklch(0.96 0 0);
+    border-bottom-color: oklch(0.32 0 0);
+  }
+
+  .prose :where(h3) {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-top: 1.4em;
+    margin-bottom: 0.5em;
+    line-height: 1.3;
+    color: oklch(0.18 0 0);
+  }
+  .dark .prose :where(h3) { color: oklch(0.96 0 0); }
+
+  .prose :where(h4) {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-top: 1.2em;
+    margin-bottom: 0.4em;
+    color: oklch(0.18 0 0);
+  }
+  .dark .prose :where(h4) { color: oklch(0.96 0 0); }
+
+  .prose :where(h5, h6) {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-top: 1em;
+    margin-bottom: 0.3em;
+    color: oklch(0.18 0 0);
+  }
+  .dark .prose :where(h5, h6) { color: oklch(0.96 0 0); }
+
+  /* Paragraphs */
+  .prose :where(p) {
+    margin-top: 0;
+    margin-bottom: 1em;
+  }
+  .prose :where(p + p) {
+    margin-top: 1em;
+  }
+
+  /* Lists */
+  .prose :where(ul) {
+    list-style: disc outside;
+    margin: 0.8em 0;
+    padding-left: 1.6em;
+  }
+  .prose :where(ol) {
+    list-style: decimal outside;
+    margin: 0.8em 0;
+    padding-left: 1.6em;
+  }
+  .prose :where(li) {
+    margin: 0.25em 0;
+  }
+  .prose :where(li > ul, li > ol) {
+    margin: 0.25em 0;
+  }
+  .prose :where(ul ul) { list-style: circle outside; }
+  .prose :where(ul ul ul) { list-style: square outside; }
+
+  /* Inline code */
+  .prose :where(code):not(pre code) {
+    font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    background: oklch(0.95 0 0);
+    color: oklch(0.3 0 0);
+    padding: 0.12em 0.35em;
+    border-radius: 0.25em;
+    font-weight: 500;
+  }
+  .dark .prose :where(code):not(pre code) {
+    background: oklch(0.28 0 0);
+    color: oklch(0.88 0 0);
+  }
+
+  /* Code blocks */
+  .prose :where(pre) {
+    background: oklch(0.18 0 0);
+    color: oklch(0.92 0 0);
+    padding: 0.9em 1.1em;
+    border-radius: 0.5em;
+    overflow-x: auto;
+    margin: 1em 0;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 1px solid oklch(0.3 0 0);
+  }
+  .dark .prose :where(pre) {
+    background: oklch(0.16 0 0);
+    border-color: oklch(0.3 0 0);
+  }
+  .prose :where(pre code) {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+    border-radius: 0;
+    font-weight: 400;
+  }
+
+  /* Links */
+  .prose :where(a) {
+    color: oklch(0.55 0.18 145);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    font-weight: 500;
+    transition: color 0.15s;
+  }
+  .prose :where(a:hover) {
+    color: oklch(0.45 0.2 145);
+  }
+  .dark .prose :where(a) {
+    color: oklch(0.7 0.18 145);
+  }
+  .dark .prose :where(a:hover) {
+    color: oklch(0.8 0.2 145);
+  }
+
+  /* Strong / em */
+  .prose :where(strong) {
+    font-weight: 700;
+    color: oklch(0.18 0 0);
+  }
+  .dark .prose :where(strong) {
+    color: oklch(0.96 0 0);
+  }
+  .prose :where(em) { font-style: italic; }
+
+  /* Blockquotes */
+  .prose :where(blockquote) {
+    border-left: 3px solid oklch(0.55 0.18 145);
+    padding: 0.2em 0 0.2em 1em;
+    margin: 1em 0;
+    color: oklch(0.4 0 0);
+    font-style: italic;
+    background: oklch(0.97 0 0);
+    border-radius: 0 0.25em 0.25em 0;
+  }
+  .dark .prose :where(blockquote) {
+    color: oklch(0.7 0 0);
+    background: oklch(0.25 0 0);
+    border-left-color: oklch(0.65 0.18 145);
+  }
+  .prose :where(blockquote p) {
+    margin: 0.3em 0;
+  }
+
+  /* Tables */
+  .prose :where(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.85em;
+    display: block;
+    overflow-x: auto;
+  }
+  .prose :where(thead) {
+    border-bottom: 2px solid oklch(0.85 0 0);
+  }
+  .dark .prose :where(thead) {
+    border-bottom-color: oklch(0.4 0 0);
+  }
+  .prose :where(th) {
+    padding: 0.5em 0.75em;
+    font-weight: 600;
+    text-align: left;
+    color: oklch(0.18 0 0);
+    border-bottom: 1px solid oklch(0.88 0 0);
+  }
+  .dark .prose :where(th) {
+    color: oklch(0.96 0 0);
+    border-bottom-color: oklch(0.35 0 0);
+  }
+  .prose :where(td) {
+    padding: 0.45em 0.75em;
+    border-bottom: 1px solid oklch(0.92 0 0);
+    vertical-align: top;
+  }
+  .dark .prose :where(td) {
+    border-bottom-color: oklch(0.3 0 0);
+  }
+  .prose :where(tbody tr:last-child td) {
+    border-bottom: 0;
+  }
+
+  /* Images */
+  .prose :where(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.4em;
+    margin: 1em 0;
+  }
+
+  /* Horizontal rule */
+  .prose :where(hr) {
+    border: 0;
+    border-top: 1px solid oklch(0.88 0 0);
+    margin: 1.6em 0;
+  }
+  .dark .prose :where(hr) {
+    border-top-color: oklch(0.32 0 0);
+  }
+
+  /* Inline elements */
+  .prose :where(kbd) {
+    font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8em;
+    padding: 0.15em 0.4em;
+    border: 1px solid oklch(0.82 0 0);
+    border-radius: 0.25em;
+    background: oklch(0.96 0 0);
+    color: oklch(0.25 0 0);
+    box-shadow: 0 1px 0 oklch(0.85 0 0);
+  }
+  .dark .prose :where(kbd) {
+    background: oklch(0.25 0 0);
+    border-color: oklch(0.35 0 0);
+    color: oklch(0.9 0 0);
+    box-shadow: 0 1px 0 oklch(0.3 0 0);
+  }
+
+  .prose :where(del), .prose :where(s) {
+    color: oklch(0.55 0 0);
+    text-decoration: line-through;
+  }
+  .dark .prose :where(del), .dark .prose :where(s) {
+    color: oklch(0.65 0 0);
+  }
+
+  .prose :where(mark) {
+    background: oklch(0.92 0.18 95);
+    color: oklch(0.25 0.05 95);
+    padding: 0.1em 0.25em;
+    border-radius: 0.2em;
+  }
+  .dark .prose :where(mark) {
+    background: oklch(0.7 0.18 95 / 0.4);
+    color: oklch(0.95 0 0);
+  }
+
+  /* First/last child margin cleanup */
+  .prose > :first-child { margin-top: 0; }
+  .prose > :last-child { margin-bottom: 0; }
+}
+
