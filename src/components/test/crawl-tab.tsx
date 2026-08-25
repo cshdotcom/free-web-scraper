@@ -129,6 +129,10 @@ export function CrawlTab() {
           { method: 'GET', path: `/v2/crawl/${id}`, signal: abortRef.current!.signal },
           authHeaders(),
         );
+        // Ignore abort errors (triggered by stopPolling / new crawl / cancel).
+        // The user doesn't need to see "Poll failed" when they intentionally
+        // stopped the previous crawl.
+        if (abortRef.current?.signal.aborted) return;
         if (!r.ok) {
           setError(r.error || 'Poll failed');
           setStatus(null);
@@ -144,7 +148,9 @@ export function CrawlTab() {
         }
         pollRef.current = setTimeout(tick, 2000);
       };
-      tick();
+      tick().catch(() => {
+        // Silently catch any unhandled rejection (e.g. AbortError).
+      });
     },
     [authHeaders],
   );
@@ -154,6 +160,8 @@ export function CrawlTab() {
 
   const onStart = async () => {
     if (!url.trim()) return;
+    // Stop any previous poll + abort before starting a new crawl.
+    stopPolling();
     setStarting(true);
     setError(null);
     setStatus(null);

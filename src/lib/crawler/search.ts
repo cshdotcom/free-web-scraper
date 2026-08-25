@@ -260,7 +260,11 @@ export async function searchEngines(
   // of query terms to match (in title OR snippet). This filters out
   // results that only match a single generic word (e.g. "python" when
   // the query is "python web scraping tutorial").
+  // For single-term queries (especially CJK like "天启"), require the
+  // term to appear in the title OR snippet — this filters out
+  // completely unrelated results (e.g. travel results for "天启").
   let filtered = Array.from(byUrl.values());
+  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(query);
   if (filtered.length > 5 && queryTerms.length > 1) {
     // A result "matches" a term if it appears in title or snippet.
     const termMatchCount = (item: SearchResult) => {
@@ -274,6 +278,26 @@ export async function searchEngines(
     };
     const minTermMatches = Math.max(1, Math.ceil(queryTerms.length * 0.5));
     const passing = filtered.filter((r) => termMatchCount(r) >= minTermMatches);
+    if (passing.length >= 3) {
+      filtered = passing;
+    }
+    // else keep all (don't over-filter)
+  } else if (hasCJK && queryTerms.length >= 1 && filtered.length > 3) {
+    // CJK single-term or multi-term: require the query string (or at
+    // least one term) to appear in the title OR snippet. This is
+    // critical for Chinese queries like "天启" where the engine may
+    // return completely unrelated results.
+    const queryLower = query.toLowerCase().trim();
+    const passing = filtered.filter((r) => {
+      const titleLower = r.title.toLowerCase();
+      const snippetLower = r.snippet.toLowerCase();
+      // Check if the full query appears, or at least one extracted term.
+      if (queryLower.length >= 2 && (titleLower.includes(queryLower) || snippetLower.includes(queryLower))) return true;
+      for (const term of queryTerms) {
+        if (titleLower.includes(term) || snippetLower.includes(term)) return true;
+      }
+      return false;
+    });
     if (passing.length >= 3) {
       filtered = passing;
     }
@@ -766,7 +790,28 @@ function stripTags(html: string): string {
 /** Extract meaningful search terms from the query (drop stop words). */
 function extractTerms(query: string): string[] {
   const stop = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'up', 'down', 'out', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'just', 'don', 'now', 'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'it', 'its', 'they', 'them', 'their']);
-  const terms = query.toLowerCase().split(/[^a-z0-9]+/i).filter((t) => t.length > 1 && !stop.has(t));
+
+  // Detect CJK / non-Latin characters in the query.
+  // For CJK queries, we can't split on whitespace/punctuation the same
+  // way — Chinese/Japanese/Korean text doesn't use spaces between
+  // words. Instead, we keep the full query as a single "term" and also
+  // try splitting on spaces (some CJK queries do use spaces between
+  // concept groups like "天启 皇帝").
+  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(query);
+  if (hasCJK) {
+    // For CJK: split on whitespace only (not on punctuation), keep
+    // all non-empty parts as terms. Also add the full query as a
+    // "super term" for exact-phrase matching.
+    const parts = query.toLowerCase().split(/\s+/).map((t) => t.trim()).filter((t) => t.length > 0);
+    // Remove common CJK stop words (的, 了, 是, 在, etc.)
+    const cjkStop = new Set(['的', '了', '是', '在', '和', '与', '或', '也', '都', '就', '这', '那', '个', '们', '你', '我', '他', '她', '它', '上', '下', '中', '为', '以', '及', '等', '把', '被', '让', '给', '对', '向', '从', '到', '会', '能', '可', '要', '想', '说', '做', '看', '听', '来', '去', '过', '着', '地', '得']);
+    const filtered = parts.filter((t) => !cjkStop.has(t) && t.length > 0);
+    // If the filtered list is empty (all stop words), use the original parts.
+    return filtered.length > 0 ? filtered : parts;
+  }
+
+  // Latin/Cyrillic/Arabic: split on non-alphanumeric, filter stop words.
+  const terms = query.toLowerCase().split(/[^a-z0-9\u00c0-\u024f\u0400-\u04ff\u0600-\u06ff]+/i).filter((t) => t.length > 1 && !stop.has(t));
   return terms;
 }
 
