@@ -117,10 +117,23 @@ const COOKIE_BANNER_SELECTORS = [
 /**
  * Apply stealth init script to a page (must be called BEFORE navigation).
  */
-export async function applyStealth(page: Page): Promise<void> {
+export async function applyStealth(page: Page, userAgent?: string): Promise<void> {
   if (!config.stealth) return;
   try {
     await page.addInitScript(STEALTH_INIT_SCRIPT);
+    // Also override navigator.userAgent in JavaScript so page-side
+    // bot detection scripts see our branded UA, not the default
+    // Chromium UA. Playwright's newContext({ userAgent }) only sets
+    // the HTTP header — navigator.userAgent in JS is not changed
+    // unless we explicitly override it.
+    if (userAgent) {
+      await page.addInitScript(`
+        Object.defineProperty(navigator, 'userAgent', {
+          get: () => ${JSON.stringify(userAgent)},
+          configurable: true,
+        });
+      `);
+    }
   } catch {
     // ignore — addInitScript can fail if called after navigation
   }

@@ -446,7 +446,7 @@ async function attemptScrape(
     }
 
     // Inject stealth patches BEFORE any page JS runs.
-    await applyStealth(page);
+    await applyStealth(page, params.userAgent);
 
     // Block resource types for speed if configured.
     if (params.blockResources && params.blockResources.length > 0) {

@@ -48,8 +48,8 @@ export interface SitemapResult {
   depth: number;
 }
 
-/** Default sitemap recursion depth (3 = follow 3 levels of sitemapindex). */
-const DEFAULT_SITEMAP_DEPTH = 3;
+/** Default sitemap recursion depth (5 = follow 5 levels of sitemapindex + link discovery). */
+const DEFAULT_SITEMAP_DEPTH = 5;
 
 /** Hard cap on sitemap recursion (prevents infinite loops). */
 const MAX_SITEMAP_DEPTH = 10;

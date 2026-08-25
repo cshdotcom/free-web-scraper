@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
     : 'include';
   // Sitemap recursion depth: how deep to follow sitemapindex files.
   // Default 3, max 10. Frontend + API both expose this.
-  const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 3, 0), 10);
+  const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 5, 0), 10);
 
   // Explicit sitemap path (URL or relative path). When provided, the
   // crawler fetches this URL and auto-detects:

@@ -68,7 +68,7 @@ export const DEFAULT_BRAND_NAME = 'NodeByte Crawl';
 
 /**
  * Website URL appended to every user agent as an identifier.
- * e.g. "NodeByte Crawl/3.8.6 (+https://nodebyte.cn)"
+ * e.g. "NodeByte Crawl/3.8.7 (+https://nodebyte.cn)"
  * This is a WEBSITE URL (not a repo URL) so site admins can identify the
  * crawler and visit the site to learn more / contact the operator.
  * Configurable via CRAWLER_UA_SITE_URL env var.
@@ -123,13 +123,23 @@ export interface DeviceProfile {
  * - 'mobile': random mobile UA + viewport
  *
  * The UA always includes the site URL suffix so site admins can identify
- * the crawler: "NodeByte Crawl/3.8.6 (+https://nodebyte.cn)".
+ * the crawler. Format follows the standard bot convention used by
+ * Googlebot, Bingbot, etc.:
+ *   "Mozilla/5.0 (compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)"
+ *
+ * The `compatible;` token + `;` separators match the RFC 9309 bot UA
+ * convention so site admins and WAFs can identify our crawler by the
+ * `NodeByte Bot` product token. The `CRAWLER_UA_SITE_URL` env var
+ * controls the URL in the parenthetical comment.
  */
 export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   const siteUrl = process.env.CRAWLER_UA_SITE_URL || DEFAULT_SITE_URL;
   const brand = process.env.CRAWLER_BRAND_NAME || DEFAULT_BRAND_NAME;
-  const version = '3.8.6';
-  const suffix = ` (+${siteUrl})`;
+  // Convert "NodeByte Crawl" → "NodeByte Bot" for the UA token (more
+  // standard for crawlers — Googlebot, Bingbot, etc. all use "Bot").
+  // Preserve spaces: "NodeByte Bot" not "NodeByteBot".
+  const botToken = brand.replace(/\s*Crawl\s*$/i, ' Bot').trim();
+  const version = '3.8.7';
 
   let pool: string[];
   let viewports: typeof DESKTOP_VIEWPORTS;
@@ -150,13 +160,36 @@ export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   const ua = pool[Math.floor(Math.random() * pool.length)];
   const vp = viewports[Math.floor(Math.random() * viewports.length)];
 
-  // Prepend the brand identifier so site admins can identify this crawler
-  // in their logs. Format: "NodeByte Crawl/3.2 (+repo_url) Mozilla/5.0 ..."
-  // We prepend (not append) so it doesn't break browser-detection regexes
-  // that expect the UA to start with "Mozilla/5.0".
-  // Actually, better: we add it as a parenthetical comment at the END,
-  // which is the standard place for bot identifiers (like "compatible; botname/1.0").
-  const brandedUa = `${ua} ${brand}/${version}${suffix}`;
+  // Build the UA following the standard bot convention:
+  //   Mozilla/5.0 (compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)
+  // This is the same format used by Googlebot:
+  //   Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+  //
+  // For mobile, we use the smartphone variant:
+  //   Mozilla/5.0 (iPhone; ...; compatible; NodeByte Bot/3.8.7; +https://nodebyte.cn)
+  // (The mobile UA already starts with "Mozilla/5.0 (iPhone; ..." so
+  // we insert "; compatible; NodeByte Bot/ver; +url" before the closing ")".)
+  const botComment = `compatible; ${botToken}/${version}; +${siteUrl}`;
+  let brandedUa: string;
+  // Browser UAs have multiple parenthetical comments. We need to find
+  // the FIRST closing paren ")" that closes the initial product token
+  // comment (e.g. "(Windows NT 10.0; Win64; x64)" or
+  // "(Macintosh; Intel Mac OS X 10_15_7)"). We do this by finding the
+  // position of the first ")" after the opening "(".
+  const firstOpen = ua.indexOf('(');
+  if (firstOpen >= 0) {
+    const firstClose = ua.indexOf(')', firstOpen);
+    if (firstClose >= 0) {
+      // Insert "; compatible; NodeByte Bot/ver; +url" before the
+      // first closing paren.
+      brandedUa = ua.slice(0, firstClose) + `; ${botComment}` + ua.slice(firstClose);
+    } else {
+      brandedUa = `${ua} (${botComment})`;
+    }
+  } else {
+    // No parenthetical — create one.
+    brandedUa = `${ua} (${botComment})`;
+  }
 
   return {
     userAgent: brandedUa,

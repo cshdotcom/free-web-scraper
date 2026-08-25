@@ -70,7 +70,7 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v3.8.6 — Standalone (Single Port)
+# NodeByte Crawl v3.8.7 — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
 

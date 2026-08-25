@@ -40,7 +40,7 @@ export function Hero({ baseUrl }: HeroProps) {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
             </span>
-            v3.8.6 · Firecrawl-compatible · OpenWebUI-compatible
+            v3.8.7 · Firecrawl-compatible · OpenWebUI-compatible
           </div>
 
           <h1 className="text-5xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-6xl">

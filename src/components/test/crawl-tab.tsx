@@ -84,7 +84,7 @@ export function CrawlTab() {
   // 'skip' = ignore sitemap entirely; only on-page links are crawled.
   // 'only' = ONLY use sitemap URLs; no on-page link following.
   const [sitemap, setSitemap] = React.useState<'include' | 'skip' | 'only'>('include');
-  const [sitemapDepth, setSitemapDepth] = React.useState(3);
+  const [sitemapDepth, setSitemapDepth] = React.useState(5);
   const [sitemapPath, setSitemapPath] = React.useState('');
   const [allowSubdomains, setAllowSubdomains] = React.useState(false);
   const [crawlEntireDomain, setCrawlEntireDomain] = React.useState(false);
@@ -374,7 +374,7 @@ export function CrawlTab() {
           </div>
           <div>
             <Label htmlFor="crawl-sitemap-depth" className="mb-1 block text-xs font-medium text-muted-foreground">
-              Sitemap depth (0–10)
+              Sitemap depth (0–10, default 5)
             </Label>
             <Input
               id="crawl-sitemap-depth"

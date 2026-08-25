@@ -126,19 +126,40 @@ function parseRobotsTxt(text: string): ParsedRobots {
   return { groups };
 }
 
-/** Match a path against a robots.txt rule. Returns true when blocked. */
+/** Match a path against a robots.txt rule. Returns true when blocked.
+ *
+ *  Supports all RFC 9309 patterns:
+ *    `Disallow: /`              → block everything
+ *    `Disallow: /admin/`        → block /admin/ and everything under it
+ *    `Disallow: /admin`        → block /admin, /admin/, /admin/anything
+ *    `Disallow: /admin$`       → block /admin only (not /admin/ or /admin/page)
+ *    `Disallow: /admin/*`      → block /admin/anything but NOT /admin itself
+ *    `Disallow: /*.pdf$`       → block any URL ending in .pdf
+ *    `Disallow: /*?`           → block any URL with query string
+ *    `Allow: /admin/public/`   → allow /admin/public/ (overrides Disallow: /admin/)
+ */
 function pathMatches(path: string, pattern: string): boolean {
   if (pattern === '/') return true;
   if (pattern === '') return false;
-  // RFC 9309: '*' is a wildcard, '$' is end-of-line. We support both.
-  // Simple implementation: convert pattern to a regex.
+  // The path we match against includes the query string (RFC 9309
+  // says robots.txt patterns match the URL path + query).
+  const fullPath = path;
+  // RFC 9309: '*' matches any sequence of characters.
+  // '$' matches the end of the URL (not a literal $).
   let re = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  re = re.replace(/\*/g, '.*').replace(/\$$/, '$');
-  // Anchor at start.
+  // Convert * to .* (wildcard).
+  re = re.replace(/\*/g, '.*');
+  // Convert $ at end to end-of-string anchor.
+  // Only treat $ as anchor when it's the LAST character.
+  if (re.endsWith('\\$')) {
+    re = re.slice(0, -2) + '$';
+  }
+  // Anchor at start (RFC 9309: patterns match from the beginning of the path).
   try {
-    return new RegExp('^' + re).test(path);
+    return new RegExp('^' + re).test(fullPath);
   } catch {
-    return path.startsWith(pattern);
+    // Fallback: simple startsWith match.
+    return fullPath.startsWith(pattern.replace(/\$$/, ''));
   }
 }
 

@@ -227,6 +227,12 @@ export async function searchEngines(
   const queryTerms = extractTerms(query);
   const queryLower = query.toLowerCase().trim();
   const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(query);
+  // Detect query language for language-aware ranking: when the query
+  // is in Chinese, Chinese-language results should rank above English/
+  // other-language results. We detect by checking if the query contains
+  // CJK characters.
+  const queryLang = hasCJK ? 'zh' : (/[\u0400-\u04ff]/.test(query) ? 'ru' : 'en');
+
   // For multi-word queries, also check the phrase as a whole.
   for (const item of byUrl.values()) {
     // Tag every result with source: 'web' (this is the default search
@@ -264,6 +270,22 @@ export async function searchEngines(
     if (hasCJK && queryLower.length >= 3) {
       if (titleLower.includes(queryLower)) relevance += 15.0;
       if (snippetLower.includes(queryLower)) relevance += 8.0;
+    }
+    // ---- Language-aware ranking ----
+    // When the query is Chinese, boost results that appear to be in
+    // Chinese (title/snippet contain CJK characters). Similarly for
+    // Russian (Cyrillic). English queries don't get a language boost
+    // (English is the default for most engines).
+    if (queryLang === 'zh') {
+      const titleHasCJK = /[\u4e00-\u9fff]/.test(item.title);
+      const snippetHasCJK = /[\u4e00-\u9fff]/.test(item.snippet);
+      if (titleHasCJK) relevance += 5.0;
+      if (snippetHasCJK) relevance += 2.0;
+    } else if (queryLang === 'ru') {
+      const titleHasCyrillic = /[\u0400-\u04ff]/.test(item.title);
+      const snippetHasCyrillic = /[\u0400-\u04ff]/.test(item.snippet);
+      if (titleHasCyrillic) relevance += 5.0;
+      if (snippetHasCyrillic) relevance += 2.0;
     }
     item.score += relevance;
     (item as any)._relevance = relevance;
