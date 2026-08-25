@@ -673,11 +673,20 @@ async function attemptScrape(
         const out: Record<string, string[]> = {};
         for (const spec of params.attributes) {
           const key = `${spec.selector}|${spec.attribute}`;
-          out[key] = await page.evaluate((sel, attr) => {
-            return Array.from(document.querySelectorAll(sel))
-              .map((el) => (el as HTMLElement).getAttribute(attr) || '')
+          // Playwright's page.evaluate only accepts a single argument.
+          // We wrap the selector + attribute in an object.
+          const result = await page.evaluate(({ sel, attr }) => {
+            const els = Array.from(document.querySelectorAll(sel));
+            return els
+              .map((el) => {
+                if (attr === 'textContent') return (el as HTMLElement).textContent || '';
+                if (attr === 'innerHTML') return (el as HTMLElement).innerHTML || '';
+                if (attr === 'outerHTML') return (el as HTMLElement).outerHTML || '';
+                return (el as HTMLElement).getAttribute(attr) || '';
+              })
               .filter(Boolean);
-          }, spec.selector, spec.attribute);
+          }, { sel: spec.selector, attr: spec.attribute });
+          out[key] = result as string[];
         }
         data.attributes = out;
       } catch {
