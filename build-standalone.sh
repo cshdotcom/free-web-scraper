@@ -70,9 +70,11 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v3.5 — Standalone (Single Port)
+# NodeByte Crawl v3.8.0 — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
+
+Firecrawl v2 compatible. OpenWebUI/SearxNG compatible.
 
 ## Quick start
 
@@ -102,7 +104,9 @@ Edit `.env` — see `.env.example` for all options.
 
 ## API (v2 primary, v1 back-compat, SearxNG compatible)
 
-POST /v2/scrape, /v2/scrape/batch, /v2/batch/scrape, /v2/crawl, /v2/map, /v2/search
+POST /v2/scrape, /v2/scrape/batch, /v2/batch/scrape, /v2/crawl, /v2/map, /v2/search, /v2/parse
+GET  /v2/batch/scrape/:id, /v2/batch/scrape/:id/errors, /v2/crawl/:id, /v2/crawl/:id/errors
+DELETE /v2/batch/scrape/:id, /v2/crawl/:id
 GET  /search?q=&format=json (SearxNG/OpenWebUI compatible)
 README
 
