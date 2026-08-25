@@ -47,7 +47,7 @@ export async function GET() {
         try {
           const u = new URL(baseUrl);
           // Strip leading "searx." / "searxng." / "www." prefixes for readability.
-          name = u.hostname.replace(/^(searxng?|www)\./i, '');
+          name = u.hostname.replace(/^www\./i, '');
           if (!name) name = u.hostname;
         } catch {
           // Not a valid URL — skip this entry entirely

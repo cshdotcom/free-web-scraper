@@ -87,9 +87,30 @@ function loadCustomSearxngInstances(): Array<{ name: string; baseUrl: string }> 
   const raw = process.env.CRAWLER_SEARXNG_INSTANCES || '';
   if (!raw.trim()) return [];
   return raw.split(',').map((entry) => {
-    const [name, baseUrl] = entry.split('|').map((s) => s.trim());
-    return { name: name || baseUrl, baseUrl: baseUrl || name };
-  }).filter((i) => i.baseUrl);
+    const trimmed = entry.trim();
+    if (!trimmed) return null;
+    const pipeIdx = trimmed.indexOf('|');
+    let name: string;
+    let baseUrl: string;
+    if (pipeIdx >= 0) {
+      name = trimmed.slice(0, pipeIdx).trim();
+      baseUrl = trimmed.slice(pipeIdx + 1).trim();
+    } else {
+      // URL-only form — derive name from hostname (must match /api/engines
+      // route's logic so the frontend engine ID matches the search
+      // dispatcher's lookup).
+      baseUrl = trimmed;
+      try {
+        const u = new URL(baseUrl);
+        name = u.hostname.replace(/^www\./i, '');
+        if (!name) name = u.hostname;
+      } catch {
+        name = trimmed;
+      }
+    }
+    if (!baseUrl) return null;
+    return { name: name || baseUrl, baseUrl: baseUrl.replace(/\/$/, '') };
+  }).filter((i): i is { name: string; baseUrl: string } => i !== null);
 }
 
 /** All SearXNG instances to try (custom first, then public defaults). */

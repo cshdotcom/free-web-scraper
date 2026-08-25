@@ -84,25 +84,49 @@ export PLAYWRIGHT_BROWSERS_PATH="$DIR/browsers"
 # WITHOUT requiring the user to install system font packages. The
 # fonts/ directory contains Noto Sans SC, WenQuanYi Zen Hei, Noto
 # Color Emoji, Liberation Sans, and DejaVu — covering CJK, Latin,
-# Cyrillic, and Emoji rendering. We add this to FONTCONFIG_PATH
-# (in addition to the system path) so system-installed fonts are
-# still found when available.
+# Cyrillic, and Emoji rendering.
+#
+# Chromium uses fontconfig to find fonts. We set FONTCONFIG_FILE to
+# our custom fonts.conf which includes both our bundled fonts
+# directory AND the system fonts directory. We also set
+# FONTCONFIG_PATH as a fallback.
 if [ -d "$DIR/fonts" ]; then
-  export FONTCONFIG_PATH="$DIR/fonts${FONTCONFIG_PATH:+:$FONTCONFIG_PATH}"
-  # Generate a fonts.conf that tells fontconfig to look in our dir.
+  # Generate fonts.conf if not already present.
   if [ ! -f "$DIR/fonts/fonts.conf" ]; then
     cat > "$DIR/fonts/fonts.conf" << 'FONTSCONF'
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
 <fontconfig>
-  <dir>.'</dir>
-  <cachedir>./cache</cachedir>
+  <!-- Our bundled fonts directory -->
+  <dir>FONTDIR</dir>
+  <!-- Font cache directory (writable) -->
+  <cachedir>CACHEDIR</cachedir>
+  <!-- System font directories (when available) -->
+  <dir>/usr/share/fonts</dir>
+  <dir>/usr/local/share/fonts</dir>
+  <dir>~/.fonts</dir>
+  <!-- System cache -->
+  <cachedir>/var/cache/fontconfig</cachedir>
+  <cachedir>~/.cache/fontconfig</cachedir>
+  <!-- Include system config if it exists -->
   <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <!-- Configuration -->
+  <config>
+    <rescan>
+      <int>30</int>
+    </rescan>
+  </config>
 </fontconfig>
 FONTSCONF
+    # Replace FONTDIR and CACHEDIR with actual paths.
+    sed -i "s|FONTDIR|$DIR/fonts|g" "$DIR/fonts/fonts.conf"
+    sed -i "s|CACHEDIR|$DIR/fonts/cache|g" "$DIR/fonts/fonts.conf"
     mkdir -p "$DIR/fonts/cache"
   fi
-  # Rebuild font cache for our bundled fonts
+  # Point fontconfig to our custom config.
+  export FONTCONFIG_FILE="$DIR/fonts/fonts.conf"
+  export FONTCONFIG_PATH="$DIR/fonts"
+  # Rebuild font cache for our bundled fonts.
   if command -v fc-cache >/dev/null 2>&1; then
     fc-cache -f "$DIR/fonts" >/dev/null 2>&1 || true
   fi
@@ -128,7 +152,7 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v3.8.8 — Standalone (Single Port)
+# NodeByte Crawl v3.8.8P — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
 
