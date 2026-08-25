@@ -68,7 +68,7 @@ export const DEFAULT_BRAND_NAME = 'NodeByte Crawl';
 
 /**
  * Website URL appended to every user agent as an identifier.
- * e.g. "NodeByte Crawl/3.8.2 (+https://nodebyte.cn)"
+ * e.g. "NodeByte Crawl/3.8.3 (+https://nodebyte.cn)"
  * This is a WEBSITE URL (not a repo URL) so site admins can identify the
  * crawler and visit the site to learn more / contact the operator.
  * Configurable via CRAWLER_UA_SITE_URL env var.
@@ -123,12 +123,12 @@ export interface DeviceProfile {
  * - 'mobile': random mobile UA + viewport
  *
  * The UA always includes the site URL suffix so site admins can identify
- * the crawler: "NodeByte Crawl/3.8.2 (+https://nodebyte.cn)".
+ * the crawler: "NodeByte Crawl/3.8.3 (+https://nodebyte.cn)".
  */
 export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   const siteUrl = process.env.CRAWLER_UA_SITE_URL || DEFAULT_SITE_URL;
   const brand = process.env.CRAWLER_BRAND_NAME || DEFAULT_BRAND_NAME;
-  const version = '3.8.2';
+  const version = '3.8.3';
   const suffix = ` (+${siteUrl})`;
 
   let pool: string[];
@@ -351,8 +351,27 @@ let _browser: Browser | null = null;
 let _browserInitPromise: Promise<Browser> | null = null;
 
 export async function getBrowser(): Promise<Browser> {
-  if (_browser && _browser.isConnected()) return _browser;
-  if (_browserInitPromise) return _browserInitPromise;
+  // Check if we already have a connected browser.
+  if (_browser) {
+    try {
+      if (_browser.isConnected()) return _browser;
+    } catch {
+      // isConnected() can throw when the browser is in a bad state.
+    }
+    // Browser is disconnected — reset and re-launch.
+    _browser = null;
+    _browserInitPromise = null;
+  }
+  // If an init is already in progress, await it (but validate afterwards).
+  if (_browserInitPromise) {
+    try {
+      const b = await _browserInitPromise;
+      if (b && b.isConnected()) return b;
+    } catch {
+      // init failed — fall through to re-launch
+    }
+    _browserInitPromise = null;
+  }
   _browserInitPromise = (async () => {
     const browser = await chromium.launch(launchOptions);
     _browser = browser;
@@ -366,6 +385,8 @@ export async function getBrowser(): Promise<Browser> {
       } catch {
         // ignore
       }
+      _browser = null;
+      _browserInitPromise = null;
     };
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
@@ -375,6 +396,12 @@ export async function getBrowser(): Promise<Browser> {
       } catch {
         // ignore
       }
+    });
+    // Listen for the browser disconnecting unexpectedly (crash, OOM).
+    browser.on('disconnected', () => {
+      console.warn('[crawler-service] Browser disconnected unexpectedly — will re-launch on next request');
+      _browser = null;
+      _browserInitPromise = null;
     });
     return browser;
   })();

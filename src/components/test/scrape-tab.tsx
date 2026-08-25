@@ -84,6 +84,7 @@ export function ScrapeTab() {
   const [waitFor, setWaitFor] = React.useState(0);
   const [maxRetries, setMaxRetries] = React.useState(2);
   const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
+  const [cookies, setCookies] = React.useState('');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<ScrapeResponse> | null>(null);
@@ -109,6 +110,9 @@ export function ScrapeTab() {
       maxRetries,
       device,
     };
+    // Cookies: accepts a string "name=value; name2=value2" or JSON array
+    // [{name,value,domain?,path?,...}].
+    if (cookies.trim()) body.cookies = cookies.trim();
     const inc = includeTags
       .split(',')
       .map((s) => s.trim())
@@ -356,6 +360,23 @@ export function ScrapeTab() {
                     <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              {/* Cookies: string "name=value; name2=value2" or JSON array */}
+              <div className="sm:col-span-2">
+                <Label htmlFor="scrape-cookies" className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Cookies
+                </Label>
+                <Input
+                  id="scrape-cookies"
+                  type="text"
+                  placeholder='session=abc123; token=xyz789  OR  [{"name":"session","value":"abc123","domain":".example.com"}]'
+                  value={cookies}
+                  onChange={(e) => setCookies(e.target.value)}
+                  className="font-mono text-xs"
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Injected before navigation in an isolated browser context. Accepts a cookie string or JSON array. Cookies are NOT persisted — discarded after this request.
+                </p>
               </div>
             </div>
           </motion.div>

@@ -284,6 +284,16 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   // Retry loop: rotate device profiles (UA + viewport) + backoff on retryable failures.
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     attempts = attempt + 1;
+    // If the browser has crashed or been closed since we got it, try
+    // to get a fresh one before the next attempt.
+    try {
+      if (!browser.isConnected()) {
+        console.warn('[crawler] Browser disconnected — re-launching');
+        browser = await getBrowser();
+      }
+    } catch {
+      try { browser = await getBrowser(); } catch { /* give up */ }
+    }
     // If user provided a custom UA, use it. Otherwise pick a device profile
     // (UA + viewport + touch) based on the `device` option.
     // `mobile: true` is a Firecrawl-compatible shortcut for device: 'mobile'.
@@ -321,10 +331,17 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     const status = result.data?.metadata?.statusCode ?? 0;
     const retryable =
       isRetryableStatus(status) ||
-      /timeout|net::ERR_|ECONNRESET|socket hang up/i.test(lastError);
+      /timeout|net::ERR_|ECONNRESET|socket hang up|Target page, context or browser has been closed|browser has been closed|Target closed/i.test(lastError);
 
     if (!retryable || attempt === maxRetries) {
       return { ...result, attempts };
+    }
+
+    // If the error is browser-closed, force a browser re-launch before
+    // the retry (the existing browser is dead).
+    if (/Target page, context or browser has been closed|browser has been closed|Target closed/i.test(lastError)) {
+      console.warn('[crawler] browser closed error — forcing re-launch');
+      try { browser = await getBrowser(); } catch { /* will retry on next loop */ }
     }
 
     // Exponential backoff: baseDelay * 2^attempt (+ small jitter).
