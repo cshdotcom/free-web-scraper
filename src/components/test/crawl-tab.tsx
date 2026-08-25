@@ -77,6 +77,17 @@ export function CrawlTab() {
   const [excludes, setExcludes] = React.useState('*/login/*,*/admin/*');
   const [formats, setFormats] = React.useState<Format[]>(['markdown']);
   const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
+  // Sitemap auto-discovery: 'include' (default) | 'skip' | 'only'.
+  // 'include' = auto-discover sitemaps via robots.txt + common paths +
+  // <link rel="sitemap">, then recursively follow sitemapindex files
+  // up to `sitemapDepth` levels deep. Merged with on-page discovered URLs.
+  // 'skip' = ignore sitemap entirely; only on-page links are crawled.
+  // 'only' = ONLY use sitemap URLs; no on-page link following.
+  const [sitemap, setSitemap] = React.useState<'include' | 'skip' | 'only'>('include');
+  const [sitemapDepth, setSitemapDepth] = React.useState(3);
+  const [allowSubdomains, setAllowSubdomains] = React.useState(false);
+  const [crawlEntireDomain, setCrawlEntireDomain] = React.useState(false);
+  const [ignoreQueryParams, setIgnoreQueryParams] = React.useState(false);
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<CrawlStatus | null>(null);
@@ -154,12 +165,18 @@ export function CrawlTab() {
       url: url.trim(),
       maxDepth,
       limit,
+      sitemap,
+      sitemapDepth,
       scrapeOptions: { formats: selectedFormats, onlyMainContent: true, device },
     };
+    // Firecrawl-compatible path-filter aliases.
     const inc = includes.split(',').map((s) => s.trim()).filter(Boolean);
     const exc = excludes.split(',').map((s) => s.trim()).filter(Boolean);
-    if (inc.length) body.includes = inc;
-    if (exc.length) body.excludes = exc;
+    if (inc.length) body.includePaths = inc;
+    if (exc.length) body.excludePaths = exc;
+    if (allowSubdomains) body.allowSubdomains = true;
+    if (crawlEntireDomain) body.crawlEntireDomain = true;
+    if (ignoreQueryParams) body.ignoreQueryParameters = true;
 
     const r = await callApi<{ success: boolean; id?: string; error?: string }>(
       { method: 'POST', path: '/v2/crawl', body },
@@ -325,6 +342,60 @@ export function CrawlTab() {
                 <SelectItem value="mobile">{t('device.mobile')}</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div>
+            <Label htmlFor="crawl-sitemap" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Sitemap (auto-discovery)
+            </Label>
+            <Select
+              value={sitemap}
+              onValueChange={(v) => setSitemap(v as 'include' | 'skip' | 'only')}
+              disabled={!!jobId}
+            >
+              <SelectTrigger id="crawl-sitemap" className="h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="include">include (sitemap + on-page links)</SelectItem>
+                <SelectItem value="skip">skip (only on-page links)</SelectItem>
+                <SelectItem value="only">only (sitemap URLs only)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="crawl-sitemap-depth" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Sitemap depth (0–10)
+            </Label>
+            <Input
+              id="crawl-sitemap-depth"
+              type="number"
+              min={0}
+              max={10}
+              value={sitemapDepth}
+              onChange={(e) => setSitemapDepth(Math.max(0, Math.min(10, Number(e.target.value) || 0)))}
+              disabled={!!jobId || sitemap === 'skip'}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div>
+              <Label className="text-xs">allowSubdomains</Label>
+              <p className="text-[10px] text-muted-foreground">Follow subdomain links</p>
+            </div>
+            <Switch checked={allowSubdomains} onCheckedChange={setAllowSubdomains} disabled={!!jobId} />
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div>
+              <Label className="text-xs">crawlEntireDomain</Label>
+              <p className="text-[10px] text-muted-foreground">Siblings + parents</p>
+            </div>
+            <Switch checked={crawlEntireDomain} onCheckedChange={setCrawlEntireDomain} disabled={!!jobId} />
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div>
+              <Label className="text-xs">ignoreQueryParameters</Label>
+              <p className="text-[10px] text-muted-foreground">Dedupe ?a=1 vs ?a=2</p>
+            </div>
+            <Switch checked={ignoreQueryParams} onCheckedChange={setIgnoreQueryParams} disabled={!!jobId} />
           </div>
         </div>
 

@@ -151,6 +151,20 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         default: '0',
         description: 'Cache hint in ms (Firecrawl-compatible). Currently informational — the in-process crawler does not maintain a response cache, but the parameter is accepted for API compatibility.',
       },
+      {
+        name: 'ignoreRobotsTxt',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Override robots.txt enforcement (Firecrawl Enterprise feature). Honoured only when CRAWLER_ALLOW_ROBOTS_OVERRIDE=true in env. AI opt-out layers (X-Robots-Tag: noai, <meta> robots, CC-NOAI, TDM-Rep) are NEVER bypassable — they are hard legal compliance.',
+      },
+      {
+        name: 'formats (branding)',
+        type: 'string',
+        required: false,
+        default: '—',
+        description: "Add 'branding' to formats to extract the site\'s visual identity: colorScheme, logo, colors (primary/secondary/accent/background/textPrimary), fonts[], typography (fontFamilies/fontSizes). Extracted from <meta theme-color>, CSS custom properties, and computed styles.",
+      },
     ],
     requestExample: JSON.stringify(
       {
@@ -477,6 +491,20 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         description: 'Strip query parameters before deduplication (so /page?a=1 and /page?a=2 count as one URL).',
       },
       {
+        name: 'sitemapDepth',
+        type: 'number',
+        required: false,
+        default: '3',
+        description: 'Sitemap recursion depth (0-10). When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows sitemapindex files up to this depth. 0 disables recursion. No manual sitemap path required.',
+      },
+      {
+        name: 'ignoreRobotsTxt',
+        type: 'boolean',
+        required: false,
+        default: 'false',
+        description: 'Override robots.txt enforcement (Firecrawl Enterprise feature). Honoured only when CRAWLER_ALLOW_ROBOTS_OVERRIDE=true. When a URL is blocked by robots.txt without this override, the crawler returns 403 with the specific Disallow rule as the reason. AI opt-out layers (X-Robots-Tag: noai, <meta> robots, CC-NOAI, TDM-Rep) are NEVER bypassable.',
+      },
+      {
         name: 'delay',
         type: 'number',
         required: false,
@@ -718,6 +746,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         required: false,
         default: '[]',
         description: 'Remove these domains from results. Internally adds `-site:` operators.',
+      },
+      {
+        name: 'sources',
+        type: 'string[]',
+        required: false,
+        default: '["web"]',
+        description: "Source categories to query: 'web' (default — bing/duckduckgo/searxng/wikipedia), 'news' (Bing News + SearXNG news category, results include publishedDate), 'images' (Bing Images + SearXNG images category, results include imageUrl/width/height). Multiple can be requested in a single call — they run in parallel and results are tagged with `source`. When ANY source is selected, the `engines` array is ignored.",
       },
       {
         name: 'tbs',

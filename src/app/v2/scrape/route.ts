@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
     maxAge: body.maxAge,
     screenshot: screenshotOpts,
     attributes: attributesOpts,
+    ignoreRobotsTxt: body.ignoreRobotsTxt === true ? true : undefined,
   });
   return jsonResponse(result, result.success ? 200 : 422);
 }

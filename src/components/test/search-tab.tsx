@@ -22,6 +22,8 @@ import {
   AlertTriangle,
   Languages,
   Server,
+  FileText,
+  ImageIcon,
 } from 'lucide-react';
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
@@ -80,13 +82,24 @@ interface SearchResultItem {
   engine?: string;
   engines?: string[];
   score?: number;
+  /** Source category: 'web' | 'news' | 'images'. */
+  source?: 'web' | 'news' | 'images';
+  /** Image-only fields (when source='images'). */
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  /** News-only fields (when source='news'). */
+  publishedDate?: string;
 }
 interface SearchResponse {
   success: boolean;
   query?: string;
   total?: number;
   engines?: string[];
+  /** Which source categories were queried. */
+  sources?: string[];
   lang?: string;
+  safe?: boolean;
   data?: SearchResultItem[];
   error?: string;
 }
@@ -129,6 +142,12 @@ export function SearchTab() {
   const [customSearxng, setCustomSearxng] = React.useState<CustomSearxngInstance[]>([]);
   const [lang, setLang] = React.useState<SearchLang>('auto');
   const [scrapeResults, setScrapeResults] = React.useState(false);
+  // Firecrawl-compatible `sources`: 'web' | 'news' | 'images'.
+  // Multiple can be selected at once. When any are selected, the
+  // `engines` array is ignored — the backend routes based on `sources`.
+  // When NONE are selected, the backend defaults to ['web'] (and
+  // respects the `engines` array).
+  const [sources, setSources] = React.useState<string[]>([]);
 
   const [result, setResult] = React.useState<ApiResult<SearchResponse> | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -159,6 +178,12 @@ export function SearchTab() {
     );
   };
 
+  const toggleSource = (s: string) => {
+    setSources((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
+    );
+  };
+
   const onRun = async () => {
     if (!query.trim()) return;
     setLoading(true);
@@ -166,9 +191,16 @@ export function SearchTab() {
     const body: Record<string, unknown> = {
       query: query.trim(),
       limit,
-      engines,
       lang,
     };
+    // When sources are explicitly selected, send them and skip the
+    // per-engine selection (the backend routes based on sources).
+    // Otherwise send the engines array (legacy behaviour).
+    if (sources.length > 0) {
+      body.sources = sources;
+    } else {
+      body.engines = engines;
+    }
     // scrapeResults is a UI affordance — passed through to the crawler, which
     // currently ignores it (kept here so future schema additions are non-breaking).
     if (scrapeResults) body.scrapeResults = true;
@@ -270,6 +302,42 @@ export function SearchTab() {
                 {t('misc.searxngCustomLabel')} — {customSearxng.length}
               </p>
             )}
+          </div>
+          {/* Firecrawl-compatible sources selector: 'web' | 'news' | 'images'.
+              When ANY source is selected, the engines array is ignored. */}
+          <div>
+            <Label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+              {t('label.sources') || 'Sources'}
+            </Label>
+            <div className="flex flex-wrap gap-1.5">
+              {(['web', 'news', 'images'] as const).map((s) => {
+                const on = sources.includes(s);
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => toggleSource(s)}
+                    className={
+                      'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ' +
+                      (on
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400')
+                    }
+                    aria-pressed={on}
+                  >
+                    {s === 'web' && <Globe2 className="h-3 w-3" />}
+                    {s === 'news' && <FileText className="h-3 w-3" />}
+                    {s === 'images' && <ImageIcon className="h-3 w-3" />}
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {sources.length === 0
+                ? (t('misc.sourcesEmptyHint') || 'No source selected → engines array used (default web).')
+                : `${t('misc.sourcesSelectedHint') || 'Selected → engines array ignored, routed by source.'}`}
+            </p>
           </div>
           <div>
             <Label htmlFor="search-limit" className="mb-1 block text-xs font-medium text-muted-foreground">

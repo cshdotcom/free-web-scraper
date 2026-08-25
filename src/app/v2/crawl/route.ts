@@ -37,12 +37,19 @@ export async function POST(request: NextRequest) {
     : Array.isArray(body.excludes) ? body.excludes : [];
 
   // Sitemap handling: 'include' (default) | 'skip' | 'only'.
-  // We accept the value but only 'skip' actually changes behaviour — the
-  // crawler always tries the sitemap first when 'include' is set.
+  // 'include' = sitemap URLs + on-page discovered URLs (auto-discovery
+  //   reads /robots.txt Sitemap: lines, common sitemap paths, and
+  //   <link rel="sitemap"> hints, then recursively follows sitemap
+  //   index files up to `sitemapDepth` levels deep).
+  // 'skip' = ignore sitemap entirely; only on-page links are crawled.
+  // 'only' = ONLY use sitemap URLs; no on-page link following.
   const sitemap: 'include' | 'skip' | 'only' =
     body.sitemap === 'skip' ? 'skip'
     : body.sitemap === 'only' ? 'only'
     : 'include';
+  // Sitemap recursion depth: how deep to follow sitemapindex files.
+  // Default 3, max 10. Frontend + API both expose this.
+  const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 3, 0), 10);
 
   // Strip out route-level fields so they don't leak into scrapeOpts.
   const {
@@ -59,6 +66,7 @@ export async function POST(request: NextRequest) {
     excludePatterns,
     scrapeOpts,
     sitemap,
+    sitemapDepth,
     allowSubdomains: body.allowSubdomains ?? false,
     allowExternalLinks: body.allowExternalLinks ?? false,
     crawlEntireDomain: body.crawlEntireDomain ?? false,
@@ -66,6 +74,7 @@ export async function POST(request: NextRequest) {
     ignoreQueryParameters: body.ignoreQueryParameters ?? false,
     delay: typeof body.delay === 'number' ? body.delay : undefined,
     maxConcurrency: typeof body.maxConcurrency === 'number' ? body.maxConcurrency : undefined,
+    ignoreRobotsTxt: body.ignoreRobotsTxt === true,
   }, 'v2');
   return jsonResponse({ success: true, id, url: rewriteJobUrl(pollUrl) });
 }

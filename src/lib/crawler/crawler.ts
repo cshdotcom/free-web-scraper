@@ -3,6 +3,8 @@ import { getBrowser, config, pickDeviceProfile, type DeviceType } from './config
 import { extractInPage, fallbackExtract, type ExtractResult, type PageMetadata } from './extractor';
 import { htmlToMarkdown } from './markdown';
 import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep } from './stealth';
+import { guardUrl } from './url-guard';
+import { checkRobots, checkHeadersForAiOptOut, checkHtmlForAiOptOut } from './robots';
 
 export interface ScrapeOptions {
   url: string;
@@ -73,6 +75,11 @@ export interface ScrapeOptions {
    *  matching CSS selectors. Each entry: { selector, attribute }.
    *  Returned as `data.attributes: { [selector+attribute]: string[] }`. */
   attributes?: Array<{ selector: string; attribute: string }>;
+  /** Override robots.txt enforcement (Firecrawl Enterprise feature).
+   *  Disabled by default; requires CRAWLER_ALLOW_ROBOTS_OVERRIDE=true
+   *  in env. AI opt-out layers (X-Robots-Tag: noai, <meta> robots,
+   *  CC-NOAI, TDM-Rep) are NEVER bypassable. */
+  ignoreRobotsTxt?: boolean;
 }
 
 /** Browser action descriptor — see ScrapeOptions.actions. */
@@ -129,13 +136,33 @@ function parseCookies(cookies: CookieInput[] | string | undefined, targetUrl: st
   }).filter(Boolean) as CookieInput[];
 }
 
+export interface BrandingProfile {
+  colorScheme?: 'light' | 'dark';
+  logo?: string;
+  colors?: {
+    primary?: string;
+    secondary?: string;
+    accent?: string;
+    background?: string;
+    textPrimary?: string;
+    textSecondary?: string;
+  };
+  fonts?: string[];
+  typography?: {
+    fontFamilies?: { primary?: string; heading?: string; code?: string };
+    fontSizes?: { h1?: string; h2?: string; h3?: string; body?: string };
+  };
+}
+
 export interface ScrapeData {
   markdown?: string;
   html?: string;
   rawHtml?: string;
   links?: Array<{ url: string; text: string }>;
-  images?: Array<{ url: string; alt?: string }>;
+  images?: Array<{ url: string; alt?: string; width?: number; height?: number }>;
   screenshot?: string;
+  /** Branding profile extracted from page CSS + meta tags. */
+  branding?: BrandingProfile;
   /** Per-action screenshots captured via the `screenshot` action. */
   actions?: {
     screenshots?: string[];
@@ -149,6 +176,9 @@ export interface ScrapeData {
   strategy?: string;
   /** HTTP status code of the page response (200, 404, 403, etc.) */
   statusCode?: number;
+  /** robots.txt / AI opt-out block reason (set when statusCode === 403
+   *  AND the block came from the compliance layer). */
+  blockedReason?: string;
 }
 
 export interface ScrapeResult {
@@ -172,14 +202,51 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     return { success: false, error: 'URL is required' };
   }
 
-  // Validate URL early so we fail fast with a clear message.
+  // ---- Layer 1: URL guard (SSRF + protocol + length check) ----
+  const guard = await guardUrl(url);
+  if (!guard.ok) {
+    return {
+      success: false,
+      error: guard.reason || 'URL rejected by guard',
+      data: {
+        metadata: { sourceURL: url, statusCode: guard.statusCode || 400, error: guard.reason } as PageMetadata,
+        statusCode: guard.statusCode || 400,
+        blockedReason: guard.reason,
+      },
+    };
+  }
+  const safeUrl = guard.normalizedUrl!;
+
+  // ---- Layer 2: robots.txt + ai.txt compliance ----
+  // Determine the effective User-Agent for robots matching. When the
+  // user supplies a custom UA we use it; otherwise the brand UA from
+  // the device profile is used (resolved per attempt below).
+  const effectiveUa = opts.userAgent || process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
+  const allowOverride = process.env.CRAWLER_ALLOW_ROBOTS_OVERRIDE === 'true';
+  const robotsResult = await checkRobots(safeUrl, effectiveUa, {
+    ignoreRobotsTxt: opts.ignoreRobotsTxt && allowOverride,
+  });
+  if (!robotsResult.ok) {
+    return {
+      success: false,
+      error: robotsResult.reason,
+      data: {
+        metadata: { sourceURL: safeUrl, statusCode: robotsResult.statusCode || 403, error: robotsResult.reason } as PageMetadata,
+        statusCode: robotsResult.statusCode || 403,
+        blockedReason: robotsResult.reason,
+      },
+    };
+  }
+
+  // Replace the URL with the guard-normalized one for the rest of the pipeline.
+  // (The early URL validation below is now redundant but kept for backward compat.)
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(safeUrl);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return { success: false, error: `Unsupported protocol: ${parsed.protocol}` };
     }
   } catch {
-    return { success: false, error: `Invalid URL: ${url}` };
+    return { success: false, error: `Invalid URL: ${safeUrl}` };
   }
 
   const formats = opts.formats && opts.formats.length > 0 ? opts.formats : ['markdown'];
@@ -227,7 +294,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     // Screenshot viewport override (Firecrawl screenshot.viewport)
     const screenshotViewport = opts.screenshot?.viewport;
     const viewport = screenshotViewport ?? profile.viewport;
-    const result = await attemptScrape(browser, url, {
+    const result = await attemptScrape(browser, safeUrl, {
       formats, onlyMainContent, includeTags, excludeTags,
       timeout, waitFor, removeBase64Images,
       userAgent: profile.userAgent,
@@ -422,6 +489,26 @@ async function attemptScrape(
 
     if (navResp) {
       statusCode = statusCode || navResp.status();
+    }
+
+    // ---- Layer 3: HTTP header AI opt-out check ----
+    // X-Robots-Tag: noai, CC-NOAI: 1, TDM-Rep: 1 — these are NEVER
+    // bypassable (hard legal compliance). Returns 403 with reason.
+    if (navResp) {
+      try {
+        const hdrResult = checkHeadersForAiOptOut(navResp.headers());
+        if (!hdrResult.ok) {
+          return {
+            success: false,
+            error: hdrResult.reason,
+            data: {
+              metadata: { sourceURL: url, statusCode: 403, error: hdrResult.reason } as PageMetadata,
+              statusCode: 403,
+              blockedReason: hdrResult.reason,
+            },
+          };
+        }
+      } catch { /* best-effort */ }
     }
 
     // Give SPA / lazy content a moment to render. We wait for
@@ -627,6 +714,26 @@ async function attemptScrape(
       }
     }
 
+    // ---- Layer 4: HTML <meta> AI opt-out check ----
+    // Scan the raw HTML for <meta name="robots" content="noai"> etc.
+    // This is checked AFTER navigation + extraction so we have the
+    // rendered DOM (which is what the publisher actually wants to
+    // enforce — server-rendered tags are visible to crawlers).
+    {
+      const htmlResult = checkHtmlForAiOptOut(extracted.rawHtml || extracted.contentHtml || '');
+      if (!htmlResult.ok) {
+        return {
+          success: false,
+          error: htmlResult.reason,
+          data: {
+            metadata: { ...extracted.metadata, statusCode: 403, error: htmlResult.reason } as PageMetadata,
+            statusCode: 403,
+            blockedReason: htmlResult.reason,
+          },
+        };
+      }
+    }
+
     // Build the response based on requested formats.
     const data: ScrapeData = { metadata: extracted.metadata, strategy: extracted.strategy, statusCode: statusCode || extracted.metadata.statusCode };
 
@@ -643,14 +750,45 @@ async function attemptScrape(
       data.links = extracted.links;
     }
     if (params.formats.includes('images')) {
+      // Firecrawl-compatible `images` format: each entry has url, alt,
+      // AND intrinsic width/height (parsed from naturalWidth/naturalHeight
+      // — the original image dimensions, not the rendered size). Skips
+      // data: URIs and tracking pixels (< 2x2). Includes <picture>
+      // source elements and CSS background-image when discoverable.
       try {
         const imgs = await page.evaluate(() => {
-          return Array.from(document.querySelectorAll('img')).map((img) => ({
-            url: img.currentSrc || img.src || '',
-            alt: img.alt || '',
-          })).filter((i) => i.url && !i.url.startsWith('data:'));
+          const out: Array<{ url: string; alt?: string; width?: number; height?: number }> = [];
+          // Standard <img> elements.
+          for (const img of Array.from(document.querySelectorAll('img'))) {
+            const url = img.currentSrc || img.src || '';
+            if (!url || url.startsWith('data:')) continue;
+            // Skip tracking pixels (1x1 / 0x0).
+            if ((img.naturalWidth > 0 && img.naturalWidth < 2) || (img.naturalHeight > 0 && img.naturalHeight < 2)) continue;
+            out.push({
+              url,
+              alt: img.alt || undefined,
+              width: img.naturalWidth || undefined,
+              height: img.naturalHeight || undefined,
+            });
+          }
+          // <picture><source> elements (often used for responsive images).
+          for (const src of Array.from(document.querySelectorAll('picture source'))) {
+            const srcset = src.getAttribute('srcset') || '';
+            if (!srcset) continue;
+            const first = srcset.split(',')[0].trim().split(/\s+/)[0];
+            if (first && !first.startsWith('data:')) {
+              out.push({ url: first });
+            }
+          }
+          // De-duplicate by URL.
+          const seen = new Set<string>();
+          return out.filter((i) => {
+            if (seen.has(i.url)) return false;
+            seen.add(i.url);
+            return true;
+          });
         });
-        data.images = imgs as Array<{ url: string; alt?: string }>;
+        data.images = imgs as Array<{ url: string; alt?: string; width?: number; height?: number }>;
       } catch {
         data.images = [];
       }
@@ -665,6 +803,124 @@ async function attemptScrape(
         data.screenshot = `data:image/png;base64,${buf.toString('base64')}`;
       } catch {
         // Screenshot failed; skip it.
+      }
+    }
+    if (params.formats.includes('branding')) {
+      // Branding format — extract the site's visual identity (colors,
+      // fonts, logo, typography) from page CSS + meta tags. Mirrors
+      // Firecrawl's documented `branding` output structure (subset:
+      // we don't have a full LLM-driven analysis, so we extract only
+      // what's deterministically derivable from the page).
+      try {
+        const branding = await page.evaluate(() => {
+          const result: {
+            colorScheme?: 'light' | 'dark';
+            logo?: string;
+            colors?: { primary?: string; secondary?: string; accent?: string; background?: string; textPrimary?: string; textSecondary?: string };
+            fonts?: string[];
+            typography?: { fontFamilies?: { primary?: string; heading?: string; code?: string }; fontSizes?: { h1?: string; h2?: string; h3?: string; body?: string } };
+          } = {};
+
+          // Color scheme: check <meta name="color-scheme"> or prefers-color-scheme.
+          const metaCs = document.querySelector('meta[name="color-scheme"]')?.getAttribute('content') || '';
+          const metaTheme = document.querySelector('meta[name="theme-color"]')?.getAttribute('content') || '';
+          if (/dark/i.test(metaCs)) result.colorScheme = 'dark';
+          else if (/light/i.test(metaCs)) result.colorScheme = 'light';
+          else if (metaTheme) {
+            // Heuristic: a light theme-color (#fff / #f0f0f0) → light, dark → dark.
+            const c = metaTheme.replace('#', '');
+            if (c.length >= 6) {
+              const r = parseInt(c.slice(0, 2), 16);
+              const g = parseInt(c.slice(2, 4), 16);
+              const b = parseInt(c.slice(4, 6), 16);
+              if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+                const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                result.colorScheme = luma < 0.5 ? 'dark' : 'light';
+              }
+            }
+          }
+
+          // Logo: check <link rel="icon" type="image/svg+xml"> or
+          // apple-touch-icon, then <meta property="og:image">, then
+          // any element with class containing "logo".
+          const iconSvg = document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]')?.href;
+          const iconPng = document.querySelector<HTMLLinkElement>('link[rel="icon"]:not([type="image/svg+xml"])')?.href;
+          const apple = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.href;
+          const ogImage = document.querySelector<HTMLMetaElement>('meta[property="og:image"]')?.content;
+          result.logo = iconSvg || apple || iconPng || ogImage || undefined;
+
+          // Colors: <meta name="theme-color"> + CSS custom properties
+          // named --primary, --accent, --brand, etc. + first <button>
+          // background-color as a fallback for "primary".
+          result.colors = {};
+          if (metaTheme) result.colors.primary = metaTheme;
+          // CSS custom properties on :root.
+          const root = getComputedStyle(document.documentElement);
+          for (const name of ['--primary', '--brand', '--accent', '--secondary', '--background', '--bg', '--text', '--text-primary', '--text-secondary']) {
+            const v = root.getPropertyValue(name).trim();
+            if (!v) continue;
+            if (/--primary|--brand/.test(name)) result.colors.primary = result.colors.primary || v;
+            else if (name === '--accent') result.colors.accent = v;
+            else if (name === '--secondary') result.colors.secondary = v;
+            else if (name === '--background' || name === '--bg') result.colors.background = v;
+            else if (name === '--text' || name === '--text-primary') result.colors.textPrimary = v;
+            else if (name === '--text-secondary') result.colors.textSecondary = v;
+          }
+          // Fallback: first visible <button> background-color → primary.
+          if (!result.colors.primary) {
+            const btn = document.querySelector('button, a.button, .btn, [class*="button"]');
+            if (btn) {
+              const bg = getComputedStyle(btn).backgroundColor;
+              if (bg && bg !== 'rgba(0, 0, 0, 0)') result.colors.primary = bg;
+            }
+          }
+          // Fallback: body background → background, body color → textPrimary.
+          if (!result.colors.background) {
+            const bg = getComputedStyle(document.body).backgroundColor;
+            if (bg && bg !== 'rgba(0, 0, 0, 0)') result.colors.background = bg;
+          }
+          if (!result.colors.textPrimary) {
+            const c = getComputedStyle(document.body).color;
+            if (c) result.colors.textPrimary = c;
+          }
+
+          // Fonts: scan all elements and collect unique font-family values.
+          const fontSet = new Set<string>();
+          for (const el of Array.from(document.querySelectorAll('body, body *'))) {
+            const ff = getComputedStyle(el).fontFamily;
+            if (ff) {
+              for (const f of ff.split(',').map((s) => s.trim().replace(/['"]/g, ''))) {
+                if (f && !f.startsWith('-apple-') && f !== 'system-ui' && f !== 'sans-serif' && f !== 'serif' && f !== 'monospace' && f !== 'inherit' && f !== 'initial') {
+                  fontSet.add(f);
+                }
+              }
+            }
+            if (fontSet.size >= 10) break; // cap to avoid runaway scans
+          }
+          result.fonts = Array.from(fontSet);
+
+          // Typography: fontFamilies + fontSizes from key element styles.
+          result.typography = { fontFamilies: {}, fontSizes: {} };
+          const bodyFf = getComputedStyle(document.body).fontFamily;
+          if (bodyFf) result.typography.fontFamilies.primary = bodyFf.split(',')[0].trim().replace(/['"]/g, '');
+          const h1 = document.querySelector('h1');
+          if (h1) {
+            result.typography.fontFamilies.heading = getComputedStyle(h1).fontFamily.split(',')[0].trim().replace(/['"]/g, '');
+            result.typography.fontSizes.h1 = getComputedStyle(h1).fontSize;
+          }
+          const h2 = document.querySelector('h2');
+          if (h2) result.typography.fontSizes.h2 = getComputedStyle(h2).fontSize;
+          const h3 = document.querySelector('h3');
+          if (h3) result.typography.fontSizes.h3 = getComputedStyle(h3).fontSize;
+          const code = document.querySelector('code, pre');
+          if (code) result.typography.fontFamilies.code = getComputedStyle(code).fontFamily.split(',')[0].trim().replace(/['"]/g, '');
+          result.typography.fontSizes.body = getComputedStyle(document.body).fontSize;
+
+          return result;
+        });
+        data.branding = branding as BrandingProfile;
+      } catch {
+        // best-effort — branding extraction failed, skip.
       }
     }
     // Attributes format: extract specific HTML attributes from CSS selectors.

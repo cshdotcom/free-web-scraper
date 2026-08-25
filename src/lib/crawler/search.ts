@@ -27,6 +27,15 @@ export interface SearchResult {
   engine: string;
   engines: string[];
   score: number;
+  /** Source category: 'web' | 'news' | 'images'. Set when the caller
+   *  requested a specific source type via `source` opt. */
+  source?: 'web' | 'news' | 'images';
+  /** Image-only fields (populated when source='images'). */
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  /** News-only fields (populated when source='news'). */
+  publishedDate?: string;
 }
 
 export interface SearchOpts {
@@ -36,6 +45,9 @@ export interface SearchOpts {
    * like "en", "zh", "ja". When set to a specific code, search engines
    * are queried with that language preference. */
   lang?: string;
+  /** Source type: 'web' (default) | 'news' | 'images'. When set, we
+   * route to the appropriate engine pool and tag results with `source`. */
+  source?: 'web' | 'news' | 'images';
 }
 
 export interface SearchResponse {
@@ -138,6 +150,16 @@ export async function searchEngines(
   opts: SearchOpts = {},
 ): Promise<SearchResponse> {
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+
+  // Source-specific routing. When `source` is 'news' or 'images', we
+  // skip the default engine pool and call the source-specific engine.
+  if (opts.source === 'news') {
+    return searchNewsEngines(query, opts);
+  }
+  if (opts.source === 'images') {
+    return searchImagesEngines(query, opts);
+  }
+
   const engines = opts.engines && opts.engines.length > 0 ? opts.engines : DEFAULT_ENGINES;
   // Resolve "auto" → detect query language. "all" stays "all" (mixed).
   let lang = opts.lang || 'all';
@@ -201,6 +223,9 @@ export async function searchEngines(
   const queryLower = query.toLowerCase().trim();
   // For multi-word queries, also check the phrase as a whole.
   for (const item of byUrl.values()) {
+    // Tag every result with source: 'web' (this is the default search
+    // flow — news/images flows set their own source tag).
+    if (!item.source) item.source = 'web';
     const titleLower = item.title.toLowerCase();
     const snippetLower = item.snippet.toLowerCase();
     const hostLower = item.hostName.toLowerCase();
@@ -271,6 +296,14 @@ interface RawResult {
   title: string;
   snippet: string;
   hostName?: string;
+  /** Image search: source URL + dimensions. */
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  /** News search: publish date (raw string from the engine). */
+  publishedDate?: string;
+  /** Source category for grouping. */
+  source?: 'web' | 'news' | 'images';
 }
 
 // ============================================================
@@ -436,16 +469,19 @@ async function searchViaDuckDuckGoApi(query: string, lang: string): Promise<RawR
 // SearXNG aggregates Google/Bing/DDG so its relevance is better than
 // any single engine.
 // ============================================================
-async function searchViaSearXNG(query: string, lang: string, onlyBase?: string): Promise<RawResult[]> {
+async function searchViaSearXNG(query: string, lang: string, onlyBase?: string, category?: 'news' | 'images' | 'general'): Promise<RawResult[]> {
   const langParam = lang !== 'all' ? `&language=${encodeURIComponent(lang)}` : '';
+  // SearXNG `categories` parameter: 'general' (default) | 'news' | 'images'
+  // | 'videos' | 'music' | 'files'. When set, we add it to the URL.
+  const catParam = category && category !== 'general' ? `&categories=${encodeURIComponent(category)}` : '';
   // When `onlyBase` is provided, query ONLY that instance (used by the
   // `searxng:Name` engine ID flow). Otherwise, query every configured
   // instance (custom + public defaults).
   const instances = onlyBase ? [onlyBase.replace(/\/$/, '')] : getSearxngInstances();
   const instanceTasks = instances.map(async (base) => {
     try {
-      const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}`;
-      
+      const searchUrl = `${base}/search?q=${encodeURIComponent(query)}&format=json&pageno=1&safesearch=0${langParam}${catParam}`;
+
       // Step 1: Direct fetch (fast — SearXNG returns JSON, no JS needed)
       let data: any = null;
       try {
@@ -488,12 +524,28 @@ async function searchViaSearXNG(query: string, lang: string, onlyBase?: string):
       }
 
       if (data && Array.isArray(data.results) && data.results.length > 0) {
-        return data.results.slice(0, 15).map((r: any) => ({
-          url: r.url || '',
-          title: r.title || '',
-          snippet: r.content || '',
-          hostName: safeHostname(r.url || ''),
-        } as RawResult)).filter((r: RawResult) => r.url);
+        return data.results.slice(0, 30).map((r: any) => {
+          const out: RawResult = {
+            url: r.url || '',
+            title: r.title || '',
+            snippet: r.content || '',
+            hostName: safeHostname(r.url || ''),
+          };
+          // SearXNG image results include `img_src` for the actual
+          // image URL + `resolution` as `WIDTHxHEIGHT`.
+          if (r.img_src) {
+            out.imageUrl = r.img_src;
+            out.source = 'images';
+            if (r.resolution) {
+              const m = String(r.resolution).match(/^(\d+)\s*x\s*(\d+)/i);
+              if (m) { out.imageWidth = parseInt(m[1], 10); out.imageHeight = parseInt(m[2], 10); }
+            }
+          }
+          // SearXNG news results may include `publishedDate`.
+          if (r.publishedDate) out.publishedDate = String(r.publishedDate);
+          if (category === 'news') out.source = 'news';
+          return out;
+        }).filter((r: RawResult) => r.url);
       }
       return null;
     } catch {
@@ -501,8 +553,14 @@ async function searchViaSearXNG(query: string, lang: string, onlyBase?: string):
     }
   });
   try {
-    const winner = await Promise.any(instanceTasks);
-    if (winner && winner.length > 0) return winner;
+    // Combine ALL instance results instead of just the first one
+    // (better coverage + tolerance to instance outages).
+    const settled = await Promise.allSettled(instanceTasks);
+    const merged: RawResult[] = [];
+    for (const s of settled) {
+      if (s.status === 'fulfilled' && s.value) merged.push(...s.value);
+    }
+    if (merged.length > 0) return merged.slice(0, 30);
   } catch {
     // All instances failed/returned null.
   }
@@ -711,3 +769,239 @@ function extractTerms(query: string): string[] {
   const terms = query.toLowerCase().split(/[^a-z0-9]+/i).filter((t) => t.length > 1 && !stop.has(t));
   return terms;
 }
+
+// ============================================================
+// News search (source='news')
+// ============================================================
+
+/**
+ * News search: queries Bing News + SearXNG (which aggregates Google
+ * News, Yahoo News, etc.). Results are tagged with `source: 'news'`
+ * and include a `publishedDate` when the engine surfaces it.
+ */
+async function searchNewsEngines(
+  query: string,
+  opts: SearchOpts,
+): Promise<SearchResponse> {
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+  let lang = opts.lang || 'all';
+  if (lang === 'auto') lang = detectQueryLang(query);
+
+  const tasks: Promise<{ engine: string; results: RawResult[] }> [] = [];
+
+  // Bing News: https://www.bing.com/news/search?q=...
+  tasks.push(searchViaBingNews(query, lang).then((r) => ({ engine: 'bing-news', results: r })));
+  // SearXNG with the news category parameter (categories=news).
+  tasks.push(searchViaSearXNG(query, lang, undefined, 'news').then((r) => ({ engine: 'searxng-news', results: r })));
+
+  // Custom SearXNG instances (also queried for news).
+  const customInstances = loadCustomSearxngInstances();
+  for (const inst of customInstances) {
+    tasks.push(
+      searchViaSearXNG(query, lang, inst.baseUrl, 'news').then((r) => ({ engine: `searxng:${inst.name}:news`, results: r })),
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const usedEngines: string[] = [];
+  const byUrl = new Map<string, SearchResult>();
+
+  for (const r of settled) {
+    if (r.status !== 'fulfilled') continue;
+    const { engine, results: items } = r.value;
+    if (!items || items.length === 0) continue;
+    usedEngines.push(engine);
+    items.forEach((item, idx) => {
+      const norm = normalizeUrl(item.url);
+      if (!norm) return;
+      const existing = byUrl.get(norm);
+      const rankScore = Math.max(0, 10 - idx) / 10;
+      if (existing) {
+        existing.engines.push(engine);
+        existing.score += 1.0 + rankScore;
+      } else {
+        byUrl.set(norm, {
+          url: item.url,
+          title: item.title,
+          snippet: item.snippet,
+          hostName: item.hostName || safeHostname(item.url),
+          engine,
+          engines: [engine],
+          score: 1.0 + rankScore,
+          source: 'news',
+          publishedDate: item.publishedDate,
+        });
+      }
+    });
+  }
+
+  // Skip relevance filtering for news — date ranking is more important.
+  return { results: Array.from(byUrl.values()).slice(0, limit), engines: usedEngines, resolvedLang: lang };
+}
+
+/**
+ * Bing News search. The Bing News page has a different DOM structure
+ * than the regular Bing search page — news items live in `.newsitem`
+ * blocks with a `.snippet` child and a `<cite>` host source.
+ */
+async function searchViaBingNews(query: string, lang: string): Promise<RawResult[]> {
+  const bingLangMap: Record<string, string> = BING_LANG_MAP_RAW || {};
+  void bingLangMap;
+  const cc = (BING_LANG_MAP as any)[lang]?.cc || 'US';
+  const setlang = (BING_LANG_MAP as any)[lang]?.setlang || 'en-US';
+  const url = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&cc=${cc}&setlang=${setlang}`;
+  const r = await fetchRawHtml(url, 'bing-news');
+  if (!r) return [];
+  return parseBingNews(r.html);
+}
+
+function parseBingNews(html: string): RawResult[] {
+  const out: RawResult[] = [];
+  const seen = new Set<string>();
+  // News items live in `<div class="newsitem">` blocks.
+  const blockRegex = /<div[^>]*class="[^"]*newsitem[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?=<div|<section|$)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = blockRegex.exec(html)) !== null) {
+    const block = m[1];
+    const linkMatch = block.match(/<a[^>]*href="(https?:\/\/[^"]*)"[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<a[^>]*href="(https?:\/\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    const href = linkMatch[1];
+    const title = stripTags(linkMatch[2]).trim();
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const snippetMatch = block.match(/<div[^>]*class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
+    // News date — Bing shows it as `<span class="news_time">…</span>` or
+    // in the `<cite>` attribute (ISO date).
+    const dateMatch = block.match(/<span[^>]*class="[^"]*news_time[^"]*"[^>]*>([^<]+)<\/span>/i)
+      || block.match(/<cite[^>]*>([^<]+)<\/cite>/i);
+    const publishedDate = dateMatch ? dateMatch[1].trim() : undefined;
+    out.push({ url: href, title, snippet, hostName: safeHostname(href), publishedDate, source: 'news' });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+// ============================================================
+// Image search (source='images')
+// ============================================================
+
+/**
+ * Image search: queries Bing Images + SearXNG images category.
+ * Results are tagged with `source: 'images'` and include `imageUrl`,
+ * `imageWidth`, `imageHeight` when the engine surfaces them.
+ */
+async function searchImagesEngines(
+  query: string,
+  opts: SearchOpts,
+): Promise<SearchResponse> {
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+  let lang = opts.lang || 'all';
+  if (lang === 'auto') lang = detectQueryLang(query);
+
+  const tasks: Promise<{ engine: string; results: RawResult[] }> [] = [];
+
+  // Bing Images.
+  tasks.push(searchViaBingImages(query, lang).then((r) => ({ engine: 'bing-images', results: r })));
+  // SearXNG images category.
+  tasks.push(searchViaSearXNG(query, lang, undefined, 'images').then((r) => ({ engine: 'searxng-images', results: r })));
+
+  // Custom SearXNG instances (also queried for images).
+  const customInstances = loadCustomSearxngInstances();
+  for (const inst of customInstances) {
+    tasks.push(
+      searchViaSearXNG(query, lang, inst.baseUrl, 'images').then((r) => ({ engine: `searxng:${inst.name}:images`, results: r })),
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const usedEngines: string[] = [];
+  const byUrl = new Map<string, SearchResult>();
+
+  for (const r of settled) {
+    if (r.status !== 'fulfilled') continue;
+    const { engine, results: items } = r.value;
+    if (!items || items.length === 0) continue;
+    usedEngines.push(engine);
+    items.forEach((item, idx) => {
+      const norm = normalizeUrl(item.imageUrl || item.url);
+      if (!norm) return;
+      const existing = byUrl.get(norm);
+      const rankScore = Math.max(0, 10 - idx) / 10;
+      if (existing) {
+        existing.engines.push(engine);
+        existing.score += 1.0 + rankScore;
+      } else {
+        byUrl.set(norm, {
+          url: item.url,
+          title: item.title,
+          snippet: item.snippet,
+          hostName: item.hostName || safeHostname(item.url),
+          engine,
+          engines: [engine],
+          score: 1.0 + rankScore,
+          source: 'images',
+          imageUrl: item.imageUrl,
+          imageWidth: item.imageWidth,
+          imageHeight: item.imageHeight,
+        });
+      }
+    });
+  }
+
+  // Skip relevance filtering for images — visual ranking matters more.
+  return { results: Array.from(byUrl.values()).slice(0, limit), engines: usedEngines, resolvedLang: lang };
+}
+
+/** Bing Images search. The image results page uses an `m=` attribute
+ *  on `<a class="iusc">` containing JSON with `murl` (image URL),
+ *  `turl` (thumbnail URL), and dimensions. */
+async function searchViaBingImages(query: string, lang: string): Promise<RawResult[]> {
+  const cc = (BING_LANG_MAP as any)[lang]?.cc || 'US';
+  const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&cc=${cc}&form=HDRSC2&first=1`;
+  const r = await fetchRawHtml(url, 'bing-images');
+  if (!r) return [];
+  return parseBingImages(r.html);
+}
+
+function parseBingImages(html: string): RawResult[] {
+  const out: RawResult[] = [];
+  const seen = new Set<string>();
+  // Each image is `<a class="iusc" m="{...JSON...}">` — extract the `m`
+  // attribute JSON to get the original image URL + dimensions.
+  const aRegex = /<a[^>]*class="iusc"[^>]*?m="([^"]+)"[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = aRegex.exec(html)) !== null) {
+    try {
+      // The m= attribute value is HTML-entity-encoded JSON.
+      const jsonStr = m[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+      const obj = JSON.parse(jsonStr);
+      const imageUrl = obj.murl || obj.turl || '';
+      const pageUrl = obj.purl || imageUrl;
+      if (!imageUrl || seen.has(imageUrl)) continue;
+      seen.add(imageUrl);
+      out.push({
+        url: pageUrl,
+        title: (obj.t || '').slice(0, 200) || safeHostname(pageUrl),
+        snippet: '',
+        hostName: safeHostname(pageUrl),
+        imageUrl,
+        imageWidth: obj.mw ? parseInt(obj.mw, 10) : undefined,
+        imageHeight: obj.mh ? parseInt(obj.mh, 10) : undefined,
+        source: 'images',
+      });
+      if (out.length >= 30) break;
+    } catch { /* skip malformed m= JSON */ }
+  }
+  return out;
+}
+
+// BING_LANG_MAP_RAW is an alias we never read — it's there to suppress
+// a "declared but never used" lint warning when BING_LANG_MAP is empty
+// in some builds. Set to undefined.
+const BING_LANG_MAP_RAW: Record<string, unknown> | undefined = undefined;

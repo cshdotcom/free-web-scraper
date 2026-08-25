@@ -1,5 +1,6 @@
 import { config } from './config';
 import { scrapeUrl, type ScrapeData } from './crawler';
+import { discoverSitemaps } from './sitemap';
 
 /**
  * Hybrid job store for asynchronous crawl/batch scrape jobs.
@@ -286,6 +287,9 @@ export function startCrawlJob(
     scrapeOpts: Record<string, unknown>;
     /** Firecrawl-compatible: 'include' | 'skip' | 'only' */
     sitemap?: 'include' | 'skip' | 'only';
+    /** Sitemap recursion depth (how deep to follow sitemapindex files).
+     *  Default 3, max 10. */
+    sitemapDepth?: number;
     /** Follow subdomains of the seed host. */
     allowSubdomains?: boolean;
     /** Follow external links one hop. */
@@ -300,6 +304,9 @@ export function startCrawlJob(
     delay?: number;
     /** Per-job concurrency cap. */
     maxConcurrency?: number;
+    /** Override robots.txt (Firecrawl Enterprise feature). Honoured
+     *  only when CRAWLER_ALLOW_ROBOTS_OVERRIDE=true. */
+    ignoreRobotsTxt?: boolean;
   },
   version: 'v1' | 'v2' = 'v1',
 ): { id: string; url: string } {
@@ -387,6 +394,48 @@ export function startCrawlJob(
       } catch { return false; }
     };
 
+    // ---- Pre-crawl sitemap auto-discovery ----
+    // When `sitemap` is 'include' or 'only', we fetch robots.txt
+    // Sitemap: declarations + common sitemap paths + <link rel="sitemap">
+    // hints, then recursively follow sitemapindex files up to
+    // `sitemapDepth` levels deep. The discovered URLs are merged with
+    // on-page discovered URLs (or used exclusively when sitemap='only').
+    // The crawler never needs the user to specify a sitemap path —
+    // everything is auto-discovered. This mirrors Firecrawl's behaviour.
+    if (opts.sitemap !== 'skip' && seedParsed) {
+      try {
+        const ua = (opts.scrapeOpts.userAgent as string) || process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
+        const smResult = await discoverSitemaps(seedUrl, ua, {
+          depth: opts.sitemapDepth ?? 3,
+          skipRobots: false,
+        });
+        // Seed the queue with sitemap-discovered URLs that pass the
+        // scope + filter checks. Sitemap URLs are at depth 0 (same
+        // level as the seed) so they get scraped first.
+        for (const e of smResult.entries) {
+          if (cancelled) break;
+          if (entry.data.length + queue.length >= opts.limit) break;
+          if (!isFollowable(e.url)) continue;
+          if (!isPathInScope(e.url)) continue;
+          if (!matchesFilters(e.url)) continue;
+          const key = dedupeKey(e.url);
+          if (visited.has(key)) continue;
+          // Don't add the seed URL twice (it's already in the queue).
+          if (key === dedupeKey(seedUrl)) continue;
+          queue.push({ url: e.url, depth: 0 });
+          visited.add(key);
+        }
+        // Update total to reflect discovered sitemap URLs.
+        entry.total = Math.min(queue.length, opts.limit);
+        void writeJobToDb(entry);
+      } catch {
+        // best-effort — sitemap discovery failed, continue with BFS.
+      }
+    }
+    // When sitemap='only', we DON'T follow on-page links (depth-1 BFS
+    // is skipped — only sitemap-discovered URLs are scraped).
+    const skipOnPageLinks = opts.sitemap === 'only';
+
     while (queue.length > 0 && !cancelled && entry.data.length < opts.limit) {
       const { url, depth } = queue.shift()!;
       const norm = dedupeKey(url);
@@ -407,12 +456,15 @@ export function startCrawlJob(
           ...(opts.scrapeOpts as any),
           url,
           formats: Array.from(new Set([...(opts.scrapeOpts.formats as string[] || ['markdown']), 'links'])),
+          ignoreRobotsTxt: opts.ignoreRobotsTxt,
         });
         entry.data[idx] = { url, success: r.success, data: r.data, error: r.error };
         if (!r.success && r.error) entry.errors.push({ url, error: r.error });
 
         // Discover new URLs from the scraped page (if we got links).
-        if (r.success && r.data?.links && depth < opts.maxDepth) {
+        // Skip on-page link following when sitemap='only' (the queue is
+        // already seeded exclusively from sitemap-discovered URLs).
+        if (!skipOnPageLinks && r.success && r.data?.links && depth < opts.maxDepth) {
           for (const link of r.data.links) {
             const linkUrl = typeof link === 'string' ? link : link.url;
             const linkNorm = dedupeKey(linkUrl);
