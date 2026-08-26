@@ -280,20 +280,30 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   const maxRetries = opts.maxRetries ?? config.maxRetries;
 
   // ---- Pre-request layer: curl-impersonate (TLS fingerprint) ----
-  // Try fetching with curl-impersonate first (Chrome TLS fingerprint).
-  // If the response is a static HTML page, parse it directly and return
-  // — skipping the expensive Playwright browser launch entirely. This
-  // bypasses Cloudflare/Akamai/DataDome TLS fingerprinting.
-  const canUseImpersonate =
-    !(opts.actions?.length) &&
-    !formats.includes('screenshot') &&
-    !formats.includes('branding') &&
-    !formats.includes('images');
+  // ALWAYS try curl-impersonate first, regardless of requested formats.
+  // Even when screenshot/branding/images are needed, we can use the
+  // curl-impersonate HTML to render in Playwright via page.setContent()
+  // — bypassing the site's TLS/WAF block on Playwright's Chromium.
+  //
+  // Strategy:
+  //   1. curl-impersonate fetch (Chrome TLS fingerprint).
+  //   2. If success + static HTML + no visual formats needed → parse
+  //      directly, skip Playwright entirely.
+  //   3. If success + static HTML + visual formats needed → render the
+  //      HTML in Playwright via page.setContent(), then screenshot/etc.
+  //   4. If curl-impersonate fails → fall back to Playwright navigation.
+  const needsVisual = formats.includes('screenshot') || formats.includes('branding') || formats.includes('images');
+  const canUseImpersonate = !(opts.actions?.length);
   const followNofollowOpt = opts.followNofollow === true;
   const impersonateCookies = typeof opts.cookies === 'string' ? opts.cookies : undefined;
   const impersonateHeaders = opts.headers;
   const impersonateUserAgent = opts.userAgent || '';
   const impersonateDevice = opts.device ?? 'auto';
+
+  // Store the curl-impersonate result for potential Playwright rendering.
+  let impersonateHtml: string | null = null;
+  let impersonateStatusCode = 0;
+  let impersonateFinalUrl = '';
 
   if (canUseImpersonate) {
     const impersonateUa = impersonateUserAgent || pickDeviceProfile(impersonateDevice).userAgent;
@@ -303,9 +313,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       headers: impersonateHeaders,
     });
 
-    if (impersonateResult.success && impersonateResult.isStatic) {
-      console.log(`[crawler] curl-impersonate hit (status ${impersonateResult.status}, ${impersonateResult.body.length} bytes) — skipping Playwright`);
-
+    if (impersonateResult.success) {
       // Check HTTP headers for AI opt-out (layer 3).
       const headerResult = checkHeadersForAiOptOut(
         new Headers(Object.entries(impersonateResult.headers).map(([k, v]) => [k, v])),
@@ -336,51 +344,60 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
         };
       }
 
-      // Use the server-side fallback extractor to parse the HTML.
-      const fb = fallbackExtract(impersonateResult.body, safeUrl);
-      const data: ScrapeData = {
-        metadata: {
-          ...fb.metadata,
+      // Store for potential Playwright rendering.
+      impersonateHtml = impersonateResult.body;
+      impersonateStatusCode = impersonateResult.status;
+      impersonateFinalUrl = impersonateResult.finalUrl || safeUrl;
+
+      // If no visual formats needed, parse directly and return.
+      if (!needsVisual && impersonateResult.isStatic) {
+        console.log(`[crawler] curl-impersonate hit (status ${impersonateResult.status}, ${impersonateResult.body.length} bytes) — skipping Playwright`);
+
+        const fb = fallbackExtract(impersonateResult.body, safeUrl);
+        const data: ScrapeData = {
+          metadata: {
+            ...fb.metadata,
+            statusCode: impersonateResult.status,
+            sourceURL: safeUrl,
+            url: impersonateFinalUrl,
+          } as PageMetadata,
+          strategy: 'curl-impersonate-static',
           statusCode: impersonateResult.status,
-          sourceURL: safeUrl,
-          url: impersonateResult.finalUrl || safeUrl,
-        } as PageMetadata,
-        strategy: 'curl-impersonate-static',
-        statusCode: impersonateResult.status,
-      };
+        };
 
-      if (formats.includes('markdown')) {
-        data.markdown = htmlToMarkdown(fb.contentHtml, { removeBase64Images });
-      }
-      if (formats.includes('html')) {
-        data.html = fb.contentHtml;
-      }
-      if (formats.includes('rawHtml')) {
-        data.rawHtml = impersonateResult.body;
-      }
-      if (formats.includes('links')) {
-        // fallbackExtract doesn't return links, so extract them
-        // from the raw HTML using the same regex approach.
-        const rawLinks: Array<{ url: string; text: string }> = [];
-        const linkRegex = /<a\s+[^>]*?href\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*?>([\s\S]*?)<\/a>/gi;
-        let lm: RegExpExecArray | null;
-        while ((lm = linkRegex.exec(impersonateResult.body)) !== null) {
-          rawLinks.push({ url: lm[1], text: lm[2].replace(/<[^>]+>/g, '').trim() });
+        if (formats.includes('markdown')) {
+          data.markdown = htmlToMarkdown(fb.contentHtml, { removeBase64Images });
         }
-        if (followNofollowOpt) {
-          data.links = rawLinks;
-        } else {
-          data.links = filterNofollowLinks(impersonateResult.body, rawLinks);
+        if (formats.includes('html')) {
+          data.html = fb.contentHtml;
         }
+        if (formats.includes('rawHtml')) {
+          data.rawHtml = impersonateResult.body;
+        }
+        if (formats.includes('links')) {
+          const rawLinks: Array<{ url: string; text: string }> = [];
+          const linkRegex = /<a\s+[^>]*?href\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*?>([\s\S]*?)<\/a>/gi;
+          let lm: RegExpExecArray | null;
+          while ((lm = linkRegex.exec(impersonateResult.body)) !== null) {
+            rawLinks.push({ url: lm[1], text: lm[2].replace(/<[^>]+>/g, '').trim() });
+          }
+          if (followNofollowOpt) {
+            data.links = rawLinks;
+          } else {
+            data.links = filterNofollowLinks(impersonateResult.body, rawLinks);
+          }
+        }
+
+        return { success: true, data, attempts: 1 };
       }
 
-      return { success: true, data, attempts: 1 };
-    }
-
-    if (!impersonateResult.success) {
-      console.log(`[crawler] curl-impersonate failed (status ${impersonateResult.status}) — falling back to Playwright`);
-    } else if (!impersonateResult.isStatic) {
-      console.log(`[crawler] curl-impersonate got dynamic page — falling back to Playwright`);
+      // Visual formats needed but we have HTML from curl-impersonate.
+      // We'll render it in Playwright below via page.setContent().
+      console.log(`[crawler] curl-impersonate got HTML (${impersonateResult.body.length} bytes) — will render in Playwright for visual formats`);
+    } else {
+      if (!impersonateResult.success) {
+        console.log(`[crawler] curl-impersonate failed (status ${impersonateResult.status}) — falling back to Playwright`);
+      }
     }
   }
 
@@ -433,7 +450,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       screenshot: opts.screenshot,
       attributes: opts.attributes,
       followNofollow: followNofollowOpt,
-    });
+    }, impersonateHtml);
 
     if (result.success) {
       return { ...result, attempts };
@@ -497,6 +514,10 @@ async function attemptScrape(
   browser: Browser,
   url: string,
   params: AttemptParams,
+  // When provided, render this HTML directly via page.setContent()
+  // instead of navigating to the URL. Used when curl-impersonate
+  // fetched the HTML but we need Playwright for screenshots/branding.
+  prerenderedHtml?: string | null,
 ): Promise<ScrapeResult> {
   let page: Page | null = null;
   let context: BrowserContext | null = null;
@@ -601,24 +622,30 @@ async function attemptScrape(
     // responses by default. We catch this and still proceed with extraction
     // so the user gets the status code + page content (error pages are
     // still useful for debugging).
+    // Navigate to the URL or render pre-fetched HTML.
     let navResp: Response | null = null;
-    try {
-      navResp = await page.goto(url, {
+    if (prerenderedHtml) {
+      // Render the curl-impersonate HTML in Playwright — no network
+      // request needed, bypasses TLS/WAF blocks entirely.
+      console.log('[crawler] Rendering curl-impersonate HTML via page.setContent()');
+      statusCode = 200; // We already know the status from curl-impersonate.
+      await page.setContent(prerenderedHtml, {
         waitUntil: 'domcontentloaded',
         timeout: params.timeout,
       });
-    } catch (navErr: any) {
-      // If it's a non-2xx HTTP response error, the page still loaded —
-      // extract the status code from the error and continue.
-      const msg = navErr?.message || '';
-      if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
-        // The response was received but had a non-2xx status. Try to get
-        // the status from the response listener (set above) or default to 0.
-        // The page content is still available for extraction.
-        lastError = `Navigation returned non-2xx status (page may still have content)`;
-      } else {
-        // Genuine navigation failure (DNS, connection refused, etc.)
-        throw navErr;
+    } else {
+      try {
+        navResp = await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: params.timeout,
+        });
+      } catch (navErr: any) {
+        const msg = navErr?.message || '';
+        if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
+          lastError = `Navigation returned non-2xx status (page may still have content)`;
+        } else {
+          throw navErr;
+        }
       }
     }
 
