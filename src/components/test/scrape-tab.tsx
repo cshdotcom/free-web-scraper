@@ -85,6 +85,10 @@ export function ScrapeTab() {
   const [maxRetries, setMaxRetries] = React.useState(2);
   const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
   const [cookies, setCookies] = React.useState('');
+  const [ignoreRobotsTxt, setIgnoreRobotsTxt] = React.useState(false);
+  const [followNofollow, setFollowNofollow] = React.useState(false);
+  const [showRobotsWarning, setShowRobotsWarning] = React.useState(false);
+  const [robotsWarningAccepted, setRobotsWarningAccepted] = React.useState(false);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<ScrapeResponse> | null>(null);
@@ -113,6 +117,8 @@ export function ScrapeTab() {
     // Cookies: accepts a string "name=value; name2=value2" or JSON array
     // [{name,value,domain?,path?,...}].
     if (cookies.trim()) body.cookies = cookies.trim();
+    if (ignoreRobotsTxt) body.ignoreRobotsTxt = true;
+    if (followNofollow) body.followNofollow = true;
     const inc = includeTags
       .split(',')
       .map((s) => s.trim())
@@ -378,10 +384,102 @@ export function ScrapeTab() {
                   Injected before navigation in an isolated browser context. Accepts a cookie string or JSON array. Cookies are NOT persisted — discarded after this request.
                 </p>
               </div>
+              {/* robots.txt compliance toggle */}
+              <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                <div>
+                  <Label className="text-xs">Follow robots.txt</Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    When ON (default), the crawler respects robots.txt rules. Turning OFF ignores robots.txt — use at your own legal risk.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-medium text-muted-foreground">
+                    {ignoreRobotsTxt ? 'IGNORED' : 'FOLLOWED'}
+                  </span>
+                  <Switch
+                    checked={!ignoreRobotsTxt}
+                    onCheckedChange={(checked) => {
+                      if (!checked) {
+                        // User wants to IGNORE robots.txt — show warning.
+                        setShowRobotsWarning(true);
+                      } else {
+                        setIgnoreRobotsTxt(false);
+                        setRobotsWarningAccepted(false);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              {/* nofollow compliance toggle */}
+              <div className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                <div>
+                  <Label className="text-xs">Respect rel="nofollow"</Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    When ON (default), links marked rel="nofollow" are not followed. Turning OFF treats nofollow links as regular links.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-medium text-muted-foreground">
+                    {followNofollow ? 'IGNORED' : 'RESPECTED'}
+                  </span>
+                  <Switch
+                    checked={!followNofollow}
+                    onCheckedChange={(checked) => setFollowNofollow(!checked)}
+                  />
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
       </div>
+
+      {/* robots.txt legal warning dialog */}
+      {showRobotsWarning && !robotsWarningAccepted && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-w-md rounded-lg border border-amber-500/40 bg-card p-6 shadow-xl">
+            <h3 className="mb-3 text-base font-semibold text-amber-600 dark:text-amber-400">
+              ⚠ Legal Risk Warning: Disabling robots.txt
+            </h3>
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                <strong>robots.txt is the standard protocol that websites use to control crawler access.</strong> Ignoring it may:
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>Violate the website's terms of service</li>
+                <li>Constitute unauthorized access under computer fraud laws (e.g., CFAA in the US)</li>
+                <li>Result in IP bans or legal action from website owners</li>
+                <li>Breach GDPR/CCPA data protection regulations</li>
+              </ul>
+              <p className="font-medium text-foreground">
+                AI opt-out signals (noai, CC-NOAI, TDM-Rep) will still be respected regardless of this setting.
+              </p>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowRobotsWarning(false);
+                  setIgnoreRobotsTxt(false);
+                }}
+              >
+                Cancel (Keep following)
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setIgnoreRobotsTxt(true);
+                  setRobotsWarningAccepted(true);
+                  setShowRobotsWarning(false);
+                }}
+              >
+                I understand the risk — Disable
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">

@@ -90,6 +90,7 @@ export async function POST(request: NextRequest) {
     delay: typeof body.delay === 'number' ? body.delay : undefined,
     maxConcurrency: typeof body.maxConcurrency === 'number' ? body.maxConcurrency : undefined,
     ignoreRobotsTxt: body.ignoreRobotsTxt === true,
+    followNofollow: body.followNofollow === true,
   }, 'v2');
   return jsonResponse({ success: true, id, url: rewriteJobUrl(pollUrl) });
 }

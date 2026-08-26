@@ -5,6 +5,7 @@ import { htmlToMarkdown } from './markdown';
 import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep } from './stealth';
 import { guardUrl } from './url-guard';
 import { checkRobots, checkHeadersForAiOptOut, checkHtmlForAiOptOut } from './robots';
+import { impersonateFetch } from './curl-impersonate';
 
 export interface ScrapeOptions {
   url: string;
@@ -75,11 +76,18 @@ export interface ScrapeOptions {
    *  matching CSS selectors. Each entry: { selector, attribute }.
    *  Returned as `data.attributes: { [selector+attribute]: string[] }`. */
   attributes?: Array<{ selector: string; attribute: string }>;
-  /** Override robots.txt enforcement (Firecrawl Enterprise feature).
-   *  Disabled by default; requires CRAWLER_ALLOW_ROBOTS_OVERRIDE=true
-   *  in env. AI opt-out layers (X-Robots-Tag: noai, <meta> robots,
-   *  CC-NOAI, TDM-Rep) are NEVER bypassable. */
+  /** Override robots.txt enforcement. Default: false (follow robots.txt).
+   *  When true, robots.txt rules are ignored. AI opt-out layers
+   *  (X-Robots-Tag: noai, <meta> robots, CC-NOAI, TDM-Rep) are NEVER
+   *  bypassable — they are hard legal compliance. */
   ignoreRobotsTxt?: boolean;
+  /** Whether to follow rel="nofollow" links. Default: false (respect
+   *  nofollow). When true, nofollow links are treated as regular links.
+   *  This affects the crawl job's link discovery — when a page contains
+   *  <a href="..." rel="nofollow"> or <meta name="robots" content="nofollow">,
+   *  those links/pages are not followed by default. Set followNofollow:
+   *  true to override. */
+  followNofollow?: boolean;
 }
 
 /** Browser action descriptor — see ScrapeOptions.actions. */
@@ -218,13 +226,13 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   const safeUrl = guard.normalizedUrl!;
 
   // ---- Layer 2: robots.txt + ai.txt compliance ----
-  // Determine the effective User-Agent for robots matching. When the
-  // user supplies a custom UA we use it; otherwise the brand UA from
-  // the device profile is used (resolved per attempt below).
+  // robots.txt enforcement is controlled by `ignoreRobotsTxt` in the
+  // request body. Default: false (follow robots.txt). When true,
+  // robots.txt rules are skipped entirely. AI opt-out layers (noai,
+  // CC-NOAI, TDM-Rep) are NEVER bypassable.
   const effectiveUa = opts.userAgent || process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
-  const allowOverride = process.env.CRAWLER_ALLOW_ROBOTS_OVERRIDE === 'true';
   const robotsResult = await checkRobots(safeUrl, effectiveUa, {
-    ignoreRobotsTxt: opts.ignoreRobotsTxt && allowOverride,
+    ignoreRobotsTxt: opts.ignoreRobotsTxt === true,
   });
   if (!robotsResult.ok) {
     return {
@@ -270,6 +278,111 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
           ? (config.blockResourceTypes?.filter((t: string) => t !== 'image' && t !== 'media') ?? null)
           : config.blockResourceTypes;
   const maxRetries = opts.maxRetries ?? config.maxRetries;
+
+  // ---- Pre-request layer: curl-impersonate (TLS fingerprint) ----
+  // Try fetching with curl-impersonate first (Chrome TLS fingerprint).
+  // If the response is a static HTML page, parse it directly and return
+  // — skipping the expensive Playwright browser launch entirely. This
+  // bypasses Cloudflare/Akamai/DataDome TLS fingerprinting.
+  const canUseImpersonate =
+    !(opts.actions?.length) &&
+    !formats.includes('screenshot') &&
+    !formats.includes('branding') &&
+    !formats.includes('images');
+  const followNofollowOpt = opts.followNofollow === true;
+  const impersonateCookies = typeof opts.cookies === 'string' ? opts.cookies : undefined;
+  const impersonateHeaders = opts.headers;
+  const impersonateUserAgent = opts.userAgent || '';
+  const impersonateDevice = opts.device ?? 'auto';
+
+  if (canUseImpersonate) {
+    const impersonateUa = impersonateUserAgent || pickDeviceProfile(impersonateDevice).userAgent;
+    const impersonateResult = await impersonateFetch(safeUrl, impersonateUa, {
+      cookies: impersonateCookies,
+      timeout: Math.min(timeout, 15000),
+      headers: impersonateHeaders,
+    });
+
+    if (impersonateResult.success && impersonateResult.isStatic) {
+      console.log(`[crawler] curl-impersonate hit (status ${impersonateResult.status}, ${impersonateResult.body.length} bytes) — skipping Playwright`);
+
+      // Check HTTP headers for AI opt-out (layer 3).
+      const headerResult = checkHeadersForAiOptOut(
+        new Headers(Object.entries(impersonateResult.headers).map(([k, v]) => [k, v])),
+      );
+      if (!headerResult.ok) {
+        return {
+          success: false,
+          error: headerResult.reason,
+          data: {
+            metadata: { sourceURL: safeUrl, statusCode: 403, error: headerResult.reason } as PageMetadata,
+            statusCode: 403,
+            blockedReason: headerResult.reason,
+          },
+        };
+      }
+
+      // Check HTML for AI opt-out (layer 4).
+      const htmlResult = checkHtmlForAiOptOut(impersonateResult.body);
+      if (!htmlResult.ok) {
+        return {
+          success: false,
+          error: htmlResult.reason,
+          data: {
+            metadata: { sourceURL: safeUrl, statusCode: 403, error: htmlResult.reason } as PageMetadata,
+            statusCode: 403,
+            blockedReason: htmlResult.reason,
+          },
+        };
+      }
+
+      // Use the server-side fallback extractor to parse the HTML.
+      const fb = fallbackExtract(impersonateResult.body, safeUrl);
+      const data: ScrapeData = {
+        metadata: {
+          ...fb.metadata,
+          statusCode: impersonateResult.status,
+          sourceURL: safeUrl,
+          url: impersonateResult.finalUrl || safeUrl,
+        } as PageMetadata,
+        strategy: 'curl-impersonate-static',
+        statusCode: impersonateResult.status,
+      };
+
+      if (formats.includes('markdown')) {
+        data.markdown = htmlToMarkdown(fb.contentHtml, { removeBase64Images });
+      }
+      if (formats.includes('html')) {
+        data.html = fb.contentHtml;
+      }
+      if (formats.includes('rawHtml')) {
+        data.rawHtml = impersonateResult.body;
+      }
+      if (formats.includes('links')) {
+        // fallbackExtract doesn't return links, so extract them
+        // from the raw HTML using the same regex approach.
+        const rawLinks: Array<{ url: string; text: string }> = [];
+        const linkRegex = /<a\s+[^>]*?href\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*?>([\s\S]*?)<\/a>/gi;
+        let lm: RegExpExecArray | null;
+        while ((lm = linkRegex.exec(impersonateResult.body)) !== null) {
+          rawLinks.push({ url: lm[1], text: lm[2].replace(/<[^>]+>/g, '').trim() });
+        }
+        if (followNofollowOpt) {
+          data.links = rawLinks;
+        } else {
+          data.links = filterNofollowLinks(impersonateResult.body, rawLinks);
+        }
+      }
+
+      return { success: true, data, attempts: 1 };
+    }
+
+    if (!impersonateResult.success) {
+      console.log(`[crawler] curl-impersonate failed (status ${impersonateResult.status}) — falling back to Playwright`);
+    } else if (!impersonateResult.isStatic) {
+      console.log(`[crawler] curl-impersonate got dynamic page — falling back to Playwright`);
+    }
+  }
 
   let browser: Browser;
   try {
@@ -319,6 +432,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       headers: opts.headers,
       screenshot: opts.screenshot,
       attributes: opts.attributes,
+      followNofollow: followNofollowOpt,
     });
 
     if (result.success) {
@@ -373,6 +487,7 @@ interface AttemptParams {
   headers?: Record<string, string>;
   screenshot?: { fullPage?: boolean; quality?: number; viewport?: { width: number; height: number } };
   attributes?: Array<{ selector: string; attribute: string }>;
+  followNofollow: boolean;
 }
 
 /**
@@ -764,7 +879,12 @@ async function attemptScrape(
       data.rawHtml = extracted.rawHtml;
     }
     if (params.formats.includes('links')) {
-      data.links = extracted.links;
+      // Filter out nofollow links when followNofollow is false (default).
+      if (!params.followNofollow) {
+        data.links = filterNofollowLinks(extracted.rawHtml || extracted.contentHtml, extracted.links);
+      } else {
+        data.links = extracted.links;
+      }
     }
     if (params.formats.includes('images')) {
       // Firecrawl-compatible `images` format: each entry has url, alt,
@@ -1001,6 +1121,81 @@ async function attemptScrape(
       try { await context.close(); } catch { /* ignore */ }
     }
   }
+}
+
+// ============================================================
+// nofollow link filtering
+// ============================================================
+
+/**
+ * Filter out links with rel="nofollow" from the extracted links list.
+ * This is used when followNofollow is false (the default) — links
+ * marked with rel="nofollow" in the HTML are removed from the results.
+ *
+ * Also checks <meta name="robots" content="nofollow"> at the page
+ * level — when present, ALL links on the page are treated as nofollow.
+ *
+ * @param html     The raw HTML of the page.
+ * @param links    The extracted links (from extractor or fallback).
+ * @returns        Links with nofollow removed.
+ */
+export function filterNofollowLinks(
+  html: string,
+  links: Array<{ url: string; text: string }>,
+): Array<{ url: string; text: string }> {
+  // Check page-level nofollow: <meta name="robots" content="nofollow">
+  // or <meta name="robots" content="noindex,nofollow">
+  const metaRobotsMatch = html.match(/<meta\s+[^>]*?name\s*=\s*["']robots["'][^>]*?content\s*=\s*["']([^"']+)["'][^>]*?>/i);
+  if (metaRobotsMatch) {
+    const directives = metaRobotsMatch[1].toLowerCase().split(/[,\s]+/);
+    if (directives.includes('nofollow')) {
+      // Page-level nofollow: all links are nofollow → return empty.
+      console.log('[crawler] Page has meta robots nofollow — filtering all links');
+      return [];
+    }
+  }
+
+  // Build a set of nofollow URLs by parsing <a href="..." rel="nofollow">.
+  const nofollowUrls = new Set<string>();
+  const anchorRegex = /<a\s+[^>]*?href\s*=\s*["']([^"']+)["'][^>]*?rel\s*=\s*["']([^"']*)["'][^>]*?>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = anchorRegex.exec(html)) !== null) {
+    const href = m[1];
+    const rel = m[2].toLowerCase();
+    if (rel.includes('nofollow')) {
+      nofollowUrls.add(href);
+    }
+  }
+
+  // Also check the reverse order: rel="..." href="..."
+  const anchorRegex2 = /<a\s+[^>]*?rel\s*=\s*["']([^"']*)["'][^>]*?href\s*=\s*["']([^"']+)["'][^>]*?>/gi;
+  while ((m = anchorRegex2.exec(html)) !== null) {
+    const rel = m[1].toLowerCase();
+    const href = m[2];
+    if (rel.includes('nofollow')) {
+      nofollowUrls.add(href);
+    }
+  }
+
+  // Filter out nofollow links.
+  return links.filter((link) => {
+    // Normalize both the link URL and the nofollow URL for comparison.
+    try {
+      const linkUrl = new URL(link.url);
+      for (const nf of nofollowUrls) {
+        try {
+          const nfUrl = new URL(nf, link.url);
+          if (nfUrl.toString() === linkUrl.toString()) return false;
+        } catch {
+          if (nf === link.url) return false;
+        }
+      }
+    } catch {
+      // If URL parsing fails, check raw string match.
+      if (nofollowUrls.has(link.url)) return false;
+    }
+    return true;
+  });
 }
 
 export interface MapResult {

@@ -158,6 +158,18 @@ async function writeJobToDb(entry: JobEntry): Promise<void> {
   const db = await getDb();
   if (!db) return;
   try {
+    // Serialize the data — cap at 4 MB to avoid MySQL max_allowed_packet
+    // issues. If the data is too large, we store a truncated version
+    // with a warning marker.
+    let dataJson = JSON.stringify(entry.data);
+    if (dataJson.length > 4 * 1024 * 1024) {
+      // Truncate: keep the first 2 MB of data + a truncation marker.
+      const truncated = entry.data.slice(0, 20);
+      truncated.push({ url: '__TRUNCATED__', success: false, error: `Data truncated (${entry.data.length - 20} more entries not persisted due to size limit)` } as any);
+      dataJson = JSON.stringify(truncated);
+      console.warn(`[store] job ${entry.id} data too large (${(dataJson.length / 1024 / 1024).toFixed(1)} MB) — truncating for DB write`);
+    }
+
     await db.job.upsert({
       where: { id: entry.id },
       create: {
@@ -166,8 +178,8 @@ async function writeJobToDb(entry: JobEntry): Promise<void> {
         status: entry.status,
         total: entry.total,
         completed: entry.completed,
-        data: JSON.stringify(entry.data),
-        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n') : null,
+        data: dataJson,
+        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n').slice(0, 65535) : null,
         createdAt: new Date(entry.createdAt),
         expiresAt: new Date(entry.expiresAt),
       },
@@ -175,14 +187,14 @@ async function writeJobToDb(entry: JobEntry): Promise<void> {
         status: entry.status,
         total: entry.total,
         completed: entry.completed,
-        data: JSON.stringify(entry.data),
-        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n') : null,
+        data: dataJson,
+        error: entry.errors.length ? entry.errors.map((e) => e.error).join('\n').slice(0, 65535) : null,
         expiresAt: new Date(entry.expiresAt),
       },
     });
   } catch (e) {
     // best-effort — in-memory copy is already updated.
-    console.warn(`[store] failed to persist job ${entry.id} to MySQL:`, (e as Error).message?.slice(0, 80));
+    console.warn(`[store] failed to persist job ${entry.id} to MySQL:`, (e as Error).message?.slice(0, 120));
   }
 }
 
@@ -314,6 +326,8 @@ export function startCrawlJob(
     /** Override robots.txt (Firecrawl Enterprise feature). Honoured
      *  only when CRAWLER_ALLOW_ROBOTS_OVERRIDE=true. */
     ignoreRobotsTxt?: boolean;
+    /** Whether to follow rel="nofollow" links. Default: false (respect). */
+    followNofollow?: boolean;
   },
   version: 'v1' | 'v2' = 'v1',
 ): { id: string; url: string } {
@@ -465,6 +479,7 @@ export function startCrawlJob(
           url,
           formats: Array.from(new Set([...(opts.scrapeOpts.formats as string[] || ['markdown']), 'links'])),
           ignoreRobotsTxt: opts.ignoreRobotsTxt,
+          followNofollow: opts.followNofollow,
         });
         entry.data[idx] = { url, success: r.success, data: r.data, error: r.error };
         if (!r.success && r.error) entry.errors.push({ url, error: r.error });

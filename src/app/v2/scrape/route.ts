@@ -74,6 +74,7 @@ export async function POST(request: NextRequest) {
     screenshot: screenshotOpts,
     attributes: attributesOpts,
     ignoreRobotsTxt: body.ignoreRobotsTxt === true ? true : undefined,
+    followNofollow: body.followNofollow === true,
   });
   // Firecrawl-compatible: always return 200 with success: true/false in the
   // JSON body. OpenWebUI and other Firecrawl SDK clients treat non-200
