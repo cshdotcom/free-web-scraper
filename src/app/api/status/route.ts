@@ -30,6 +30,6 @@ export async function GET() {
     requiresAuth: apiKeys.length > 0,
     publicBaseUrl,
     brand: process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl',
-    version: '4.0.0',
+    version: '4.0.1',
   });
 }

@@ -2,7 +2,7 @@ import { type Browser, type BrowserContext, type Page, type Response } from 'pla
 import { getBrowser, config, pickDeviceProfile, type DeviceType } from './config';
 import { extractInPage, fallbackExtract, type ExtractResult, type PageMetadata } from './extractor';
 import { htmlToMarkdown } from './markdown';
-import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep } from './stealth';
+import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep, isCloudflareChallenge, waitForCloudflareChallenge } from './stealth';
 import { guardUrl } from './url-guard';
 import { checkRobots, checkHeadersForAiOptOut, checkHtmlForAiOptOut } from './robots';
 import { impersonateFetch } from './curl-impersonate';
@@ -561,7 +561,10 @@ async function attemptScrape(
     }
 
     // Inject stealth patches BEFORE any page JS runs.
-    await applyStealth(page, params.userAgent);
+    await applyStealth(page, params.userAgent, {
+      location: params.location,
+      viewport: params.viewport,
+    });
 
     // Block resource types for speed if configured.
     if (params.blockResources && params.blockResources.length > 0) {
@@ -650,6 +653,26 @@ async function attemptScrape(
     } catch {
       // networkidle is best-effort; continue if it times out.
     }
+
+    // ---- Cloudflare challenge detection ----
+    // If the page is a Cloudflare JS challenge ("Just a moment..."),
+    // wait up to 30 seconds for it to resolve before continuing.
+    try {
+      const html = await page.content();
+      if (isCloudflareChallenge(html)) {
+        console.log('[crawler] Cloudflare challenge detected — waiting for resolution');
+        const resolved = await waitForCloudflareChallenge(page, 30000);
+        if (resolved) {
+          console.log('[crawler] Cloudflare challenge resolved — continuing with extraction');
+          // Wait for networkidle again after challenge resolution.
+          try {
+            await page.waitForLoadState('networkidle', { timeout: 5000 });
+          } catch { /* best-effort */ }
+        } else {
+          console.warn('[crawler] Cloudflare challenge did not resolve in 30s — continuing anyway');
+        }
+      }
+    } catch { /* best-effort */ }
 
     // Dismiss cookie consent banners BEFORE extraction so they don't
     // pollute the cleaned HTML or hide the real content.
