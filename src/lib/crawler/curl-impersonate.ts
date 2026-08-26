@@ -13,17 +13,6 @@
  * If the response is a static HTML page (no JS-rendered content needed),
  * we parse and return it directly — skipping the expensive Playwright
  * browser launch entirely.
- *
- * ## Flow
- *
- * 1. **curl-impersonate fetch** — send the request with Chrome TLS
- *    fingerprint + Chrome User-Agent + standard browser headers.
- *    Timeout: 15s.
- * 2. **Check response** — if HTTP 200 + HTML content-type + the page
- *    looks static (no heavy SPA framework), parse the HTML directly.
- * 3. **Fallback to Playwright** — if curl-impersonate fails (non-200,
- *    timeout, or the page requires JS rendering), fall through to the
- *    normal Playwright scrape flow.
  */
 
 import { execFile } from 'child_process';
@@ -72,13 +61,20 @@ export async function impersonateFetch(
   }
 
   const timeout = opts.timeout ?? 15000;
+
+  // Write output to a temp file instead of stdout to avoid issues with
+  // binary content and header parsing. Use a separate temp file for
+  // headers.
+  const tmpDir = '/tmp';
+  const bodyFile = path.join(tmpDir, `curl_imp_body_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const headerFile = path.join(tmpDir, `curl_imp_hdr_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
   const args: string[] = [
     '-s', '-S', '-L',
-    '-o', '-',
-    '-D', '-',
+    '-o', bodyFile,
+    '-D', headerFile,
     '--compressed',
     '--max-time', String(Math.ceil(timeout / 1000)),
-    '-w', '\n---CURL_META---\n%{http_code}\n%{url_effective}\n%{content_type}',
     '-A', userAgent,
     '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     '-H', 'Accept-Language: en-US,en;q=0.9',
@@ -97,57 +93,81 @@ export async function impersonateFetch(
   args.push(url);
 
   try {
-    const { stdout } = await execFileAsync(binary, args, {
+    await execFileAsync(binary, args, {
       maxBuffer: 50 * 1024 * 1024,
       timeout: timeout + 2000,
-      env: { ...process.env, CURL_IMPERSONATE: 'chrome116' },
+      env: { ...process.env },
     });
-
-    const metaIdx = stdout.lastIndexOf('\n---CURL_META---\n');
-    let body = stdout;
-    let httpCode = 200;
-    let finalUrl = url;
-    let contentType = '';
-
-    if (metaIdx >= 0) {
-      const metaPart = stdout.slice(metaIdx + '\n---CURL_META---\n'.length).trim();
-      const metaLines = metaPart.split('\n');
-      body = stdout.slice(0, metaIdx);
-      if (metaLines[0]) httpCode = parseInt(metaLines[0], 10) || 200;
-      if (metaLines[1]) finalUrl = metaLines[1];
-      if (metaLines[2]) contentType = metaLines[2];
-    }
-
-    // Split headers from body.
-    const headerEnd = body.indexOf('\r\n\r\n');
-    let actualBody = body;
-    let lastHeaders = '';
-    if (headerEnd >= 0) {
-      lastHeaders = body.slice(0, headerEnd);
-      actualBody = body.slice(headerEnd + 4);
-    } else {
-      const nlEnd = body.indexOf('\n\n');
-      if (nlEnd >= 0) {
-        lastHeaders = body.slice(0, nlEnd);
-        actualBody = body.slice(nlEnd + 2);
-      }
-    }
-
-    // Handle redirects: take the last header block.
-    const headerBlocks = lastHeaders.split(/\r?\n\r?\n/);
-    const finalHeaderBlock = headerBlocks[headerBlocks.length - 1] || '';
-    const headers: Record<string, string> = {};
-    for (const line of finalHeaderBlock.split('\n')) {
-      const idx = line.indexOf(':');
-      if (idx > 0) headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
-    }
-
-    const isStatic = checkIsStatic(actualBody, httpCode, contentType || headers['content-type'] || '');
-
-    return { success: httpCode >= 200 && httpCode < 400, status: httpCode, headers, body: actualBody, finalUrl, isStatic };
   } catch (e) {
-    return { success: false, status: 0, headers: {}, body: '', finalUrl: url, isStatic: false, error: (e as Error).message.slice(0, 200) };
+    // Even on error, curl may have written partial output.
+    const err = e as Error;
+    return {
+      success: false,
+      status: 0,
+      headers: {},
+      body: '',
+      finalUrl: url,
+      isStatic: false,
+      error: err.message.slice(0, 200),
+    };
   }
+
+  // Read the body file.
+  let body = '';
+  try {
+    body = fs.readFileSync(bodyFile, 'utf-8');
+  } catch { /* ignore */ }
+  try { fs.unlinkSync(bodyFile); } catch { /* ignore */ }
+
+  // Read the header file.
+  let headerContent = '';
+  try {
+    headerContent = fs.readFileSync(headerFile, 'utf-8');
+  } catch { /* ignore */ }
+  try { fs.unlinkSync(headerFile); } catch { /* ignore */ }
+
+  // Parse headers. When following redirects, curl dumps multiple
+  // header blocks separated by \r\n\r\n. Take the last one.
+  const headerBlocks = headerContent.split(/\r?\n\r?\n/).filter((b) => b.trim());
+  const lastHeaders = headerBlocks[headerBlocks.length - 1] || '';
+
+  let httpCode = 200;
+  let finalUrl = url;
+  let contentType = '';
+  const headers: Record<string, string> = {};
+
+  for (const line of lastHeaders.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // HTTP status line: "HTTP/2 200" or "HTTP/1.1 200 OK"
+    if (/^HTTP\//i.test(trimmed)) {
+      const parts = trimmed.split(/\s+/);
+      httpCode = parseInt(parts[1], 10) || 200;
+      continue;
+    }
+
+    // Header: "Key: Value"
+    const idx = trimmed.indexOf(':');
+    if (idx > 0) {
+      const key = trimmed.slice(0, idx).trim().toLowerCase();
+      const val = trimmed.slice(idx + 1).trim();
+      headers[key] = val;
+      if (key === 'content-type') contentType = val;
+      if (key === 'location') finalUrl = val;
+    }
+  }
+
+  const isStatic = checkIsStatic(body, httpCode, contentType || headers['content-type'] || '');
+
+  return {
+    success: httpCode >= 200 && httpCode < 400,
+    status: httpCode,
+    headers,
+    body,
+    finalUrl: finalUrl || url,
+    isStatic,
+  };
 }
 
 function checkIsStatic(html: string, status: number, contentType: string): boolean {
