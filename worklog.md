@@ -1423,3 +1423,105 @@ Final: 23 / 23 passed, 0 failed
   - `free-web-scraper-v4.0.5-source.tar.gz` (240 KB)
   - `free-web-scraper-v4.0.5-source.zip` (319 KB)
 
+
+---
+
+## v4.0.6 — sitemapLimit API + depth clarification + slow-sitemap hang fix + frontend polling tolerance
+
+**Task ID:** v4.0.6-fix
+**Agent:** main agent (continuation)
+
+### User-reported issues + new feature requests
+
+1. Re-clarify sitemap 'depth' semantics — only counts sitemap-index recursion; article URLs are LEAVES.
+2. Frontend must allow user to input sitemap depth (already existed — verified).
+3. Add 'sitemapLimit' API parameter: cap total URLs extracted from sitemap. 0 = unlimited. Frontend input + API docs.
+4. Frontend suddenly reports "please reload" on slow-responding sitemap crawls (fast sites don't have this problem). Fix.
+
+### Fix: sitemapLimit API parameter (store.ts, v2/crawl/route.ts, v1/crawl/route.ts)
+
+- `startCrawlJob` accepts `sitemapLimit: number` (0 = unlimited, default 0).
+- `/v2/crawl` and `/v1/crawl` routes parse `body.sitemapLimit` with `Math.max(value, 0)` clamping.
+- `store.ts` passes `sitemapLimit` to `discoverSitemaps` as the `limit` parameter AND applies a secondary cap during BFS queue seeding.
+
+### Fix: sitemap.ts runaway-protection caps (sitemap.ts)
+
+**Root cause discovered during testing:** nature.com's `/sitemap.xml` references **40,093 child sitemap files**. Without caps, the crawler would try to fetch every one (15s timeout each), taking hours.
+
+Added three layers of protection:
+- `MAX_CHILD_SITEMAPS_PER_INDEX = 200` (hard cap per sitemap-index file)
+- `MAX_TOTAL_SITEMAP_FETCHES = 500` (hard cap across the whole discovery)
+- `sitemapLimit` short-circuit — when `limit > 0` and we have N URLs, stop fetching more child sitemaps.
+
+**Verified:** nature.com crawl with `sitemapLimit=3` now completes in 3s (was hanging for 3+ minutes before timeout).
+
+### Fix: Frontend polling tolerance (crawl-tab.tsx, batch-async-tab.tsx)
+
+**Root cause:** the polling loop called `setError('Poll failed')` on the FIRST poll failure, immediately clearing status. A single 502/network blip during slow sitemap discovery would cause the frontend to show "Poll failed — please reload" even though the backend was still running.
+
+**Fix:** tolerate up to 10 consecutive poll failures (~20s of errors) before surfacing the error. Each failure just retries on the next 2s tick. A success resets the counter.
+
+Applied to both crawl-tab and batch-async-tab polling loops.
+
+### Backend: 'pending' job status (store.ts)
+
+`JobStatus` now includes `'pending'`. Crawl jobs start in 'pending' while sitemap discovery runs, then flip to 'scraping' once the BFS loop starts. The frontend already supported 'pending' in its type definitions — the backend just wasn't using it. Crawl tab now shows a "Discovering sitemap URLs (this can take 30-60s on slow sites)…" banner when the job is in pending state.
+
+### Frontend: sitemapLimit input + status display (crawl-tab.tsx)
+
+- Added "Sitemap URL limit (0 = unlimited, default 0)" number input next to the existing sitemapDepth input, with explanatory hint.
+- Added 'pending' status banner so user knows what's happening during sitemap discovery.
+
+### Caddyfile (sandbox only, not in repo)
+
+Added 300s read/write timeouts to reverse_proxy so the preview gateway doesn't return 502 during long sitemap discovery.
+
+### API docs (data.ts)
+
+- `sitemapDepth` clarified with example showing depth counts ONLY sitemap-index recursion; article URLs from a urlset are LEAVES.
+- Added `sitemapLimit` parameter with full description.
+
+### Files changed (14 files)
+
+- src/lib/crawler/sitemap.ts — runaway-protection caps + limit param + cache key includes limit
+- src/lib/crawler/store.ts — JobStatus 'pending' + sitemapLimit + pass-through to discoverSitemaps
+- src/lib/crawler/config.ts — version 4.0.5 → 4.0.6
+- src/app/v2/crawl/route.ts — parse + pass sitemapLimit
+- src/app/v1/crawl/route.ts — v1 alias: parse + pass sitemapLimit + sitemapDepth + sitemapPath
+- src/components/test/crawl-tab.tsx — sitemapLimit input + 'pending' status banner + polling tolerance
+- src/components/test/batch-async-tab.tsx — polling tolerance
+- src/components/docs/data.ts — document sitemapLimit + clarify depth with example
+- src/components/docs/hero.tsx, src/components/footer.tsx — version display
+- src/app/api/status/route.ts — version bump
+- build-standalone.sh, package.json — version bump
+
+### Verification
+
+**v4.0.6 suite (scripts/test-v4.0.6.sh): 15/15 passed**
+
+```
+1.  Health check (version 4.0.6)                                    ✓
+2.  Crawl job starts (initial status acceptable)                     ✓
+3.  sitemapLimit API parameter (cap respected)                      ✓
+4.  sitemapLimit=0 (unlimited, default)                              ✓
+5.  sitemapDepth parameter (max 10, min 0)                            ✓
+6.  Backend polling is tolerant (404 doesn't crash)                  ✓
+7.  Basic regression (scrape / batch still work)                      ✓
+
+Final: 15 / 15 passed, 0 failed
+```
+
+**nature.com specific verification:** Before fix, crawl with `sitemapLimit=3` on nature.com sat in 'pending' for 3+ minutes (timeout). After fix: **completes in 3 seconds**. The 40,093 child sitemaps now hit the `MAX_CHILD_SITEMAPS_PER_INDEX=200` cap and the `limitReached()` check short-circuits.
+
+**v4.0.5 regression suite:** 22/23 passed (only the version-string check failed because the test expected "4.0.5" but the running version is now "4.0.6" — all 22 functional tests pass).
+
+### Release
+
+- Commit: `61615b4` on main
+- Tag: `v4.0.6` pushed
+- GitHub Release: https://github.com/cshdotcom/free-web-scraper/releases/tag/v4.0.6
+- Assets uploaded:
+  - `nodebyte-crawl-v4.0.6-standalone.zip` (363 MB)
+  - `free-web-scraper-v4.0.6-source.tar.gz` (246 KB)
+  - `free-web-scraper-v4.0.6-source.zip` (324 KB)
+
