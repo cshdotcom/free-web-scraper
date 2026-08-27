@@ -810,18 +810,37 @@ async function attemptScrape(
           try { await route.continue(); } catch { /* ignore */ }
         }
       });
+      // When prerendering via page.route(), apply a short per-request
+      // timeout to all sub-resources so a single slow / failing request
+      // doesn't hold the page hostage. If the WAF blocks Playwright's
+      // Chromium, every sub-resource request fails fast instead of
+      // hanging for 45s each.
+      await page.route('**/*', async (route: import('playwright').Route) => {
+        try {
+          await route.continue({ timeout: 8000 });
+        } catch {
+          try { await route.abort(); } catch { /* ignore */ }
+        }
+      });
     }
 
     try {
+      // When prerendering, cap goto at 15s — the route handler already
+      // served the main document, so we just need domcontentloaded to
+      // fire. Long hangs here usually mean sub-resource requests are
+      // failing/retrying against a WAF; we should not wait 45s for that.
+      const gotoTimeout = prerenderedHtml
+        ? Math.min(params.timeout, 15000)
+        : params.timeout;
       navResp = await page.goto(url, {
         waitUntil: 'domcontentloaded',
-        timeout: params.timeout,
+        timeout: gotoTimeout,
       });
     } catch (navErr: any) {
       const msg = navErr?.message || '';
       if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
         lastError = `Navigation returned non-2xx status (page may still have content)`;
-      } else if (prerenderedHtml && /net::ERR_FAILED|net::ERR_HTTP_RESPONSE_CODE_FAILURE|Target closed/i.test(msg)) {
+      } else if (prerenderedHtml && /net::ERR_FAILED|net::ERR_HTTP_RESPONSE_CODE_FAILURE|Target closed|Timeout|timeout/i.test(msg)) {
         // When we have prerendered HTML and the real goto still fails
         // (e.g., site blocks even sub-resource requests), continue
         // anyway — the route handler served the main document, so the
@@ -1027,10 +1046,16 @@ async function attemptScrape(
         });
       `);
       // Scroll in increments to trigger any IntersectionObserver-based lazy load.
+      // Cap the number of scroll iterations to prevent hangs on extremely
+      // tall pages (e.g. 50000px / 800px = 62 scrolls × 150ms = 9.3s).
+      // 30 iterations × 150ms = max 4.5s spent scrolling. Pages taller
+      // than that will load images only down to the 30th viewport.
       const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
       const viewportHeight = await page.evaluate(() => window.innerHeight);
       const step = Math.max(viewportHeight, 400);
-      for (let y = 0; y < scrollHeight; y += step) {
+      const maxScrolls = 30;
+      let scrollsDone = 0;
+      for (let y = 0; y < scrollHeight && scrollsDone < maxScrolls; y += step, scrollsDone++) {
         await page.evaluate((sy) => window.scrollTo(0, sy), y);
         await page.waitForTimeout(150);
       }

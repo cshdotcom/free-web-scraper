@@ -10,9 +10,33 @@
  *      `/sitemap_index.xml`, `/sitemap-index.xml`, `/news_sitemap.xml`).
  *   3. Scrapes the seed page itself for `<link rel="sitemap">` hints.
  *   4. Recursively follows `<sitemapindex>` entries up to
- *      `sitemapDepth` levels deep (configurable per request, default 3).
+ *      `sitemapDepth` levels deep (configurable per request, default 5).
  *   5. Deduplicates URLs and returns them in priority order:
  *      sitemap-discovered first, then on-page-discovered.
+ *
+ * IMPORTANT — what "depth" counts:
+ *   `sitemapDepth` ONLY counts sitemap-index recursion. Each hop from
+ *   one `<sitemapindex>` file to another `<sitemapindex>` or `<urlset>`
+ *   consumes one level of depth. Article internal links (links found
+ *   inside a content page) do NOT consume sitemap depth — they are
+ *   followed by the BFS crawl's own `maxDepth` parameter.
+ *
+ *   Example with depth=5:
+ *     /sitemap_index.xml      (depth 0 — top sitemapindex)
+ *       → /blog-sitemap.xml   (depth 1 — urlset, blog posts extracted)
+ *       → /news-sitemap-index.xml (depth 1 — nested sitemapindex)
+ *         → /news-2024.xml    (depth 2 — urlset)
+ *         → /news-2025.xml    (depth 2 — urlset)
+ *       → /shop-sitemap-index.xml (depth 1)
+ *         → /shop-cats.xml    (depth 2 — sitemapindex)
+ *           → /cat-1.xml     (depth 3 — urlset)
+ *           → /cat-2.xml     (depth 3 — urlset)
+ *             → /cat-2-1.xml (depth 4 — nested urlset inside another
+ *                              sitemapindex wrapper)
+ *
+ *   Once a `<urlset>` is reached, ALL of its `<url>` entries (content
+ *   pages) are extracted at depth N regardless of how the BFS crawl
+ *   later follows article-to-article links.
  *
  * When the caller passes an explicit `sitemapPath` (a URL), we fetch it
  * and auto-detect the content type:

@@ -20,7 +20,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
-import { Settings2, Play, Globe, ListChecks, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Settings2, Play, Globe, ListChecks, AlertCircle, CheckCircle2, Cookie } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi, type ApiResult } from './api-client';
@@ -83,9 +83,33 @@ export function BatchSyncTab() {
   const [maxRetries, setMaxRetries] = React.useState(2);
   const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  // Per-URL cookies: an array aligned with the URL list (by line index).
+  // When the user enters N URLs, we show N cookie inputs below.
+  const [perUrlCookies, setPerUrlCookies] = React.useState<string[]>(['', '']);
+  const [cookiesOpen, setCookiesOpen] = React.useState(false);
 
   const [result, setResult] = React.useState<ApiResult<BatchResponse> | null>(null);
   const [loading, setLoading] = React.useState(false);
+
+  // Parse URLs (one per line, trimmed, non-empty).
+  const urlList = React.useMemo(
+    () => urls.split('\n').map((s) => s.trim()).filter(Boolean),
+    [urls],
+  );
+
+  // Keep perUrlCookies length in sync with urlList length.
+  // When the user adds/removes a URL line, we extend/trim the cookie
+  // array without losing existing entries. Missing entries default to
+  // '' (no cookie for that URL).
+  React.useEffect(() => {
+    setPerUrlCookies((prev) => {
+      const next = new Array(urlList.length).fill('');
+      for (let i = 0; i < Math.min(prev.length, urlList.length); i++) next[i] = prev[i];
+      // Only update if length changed — avoids an infinite loop.
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+      return next;
+    });
+  }, [urlList.length]);
 
   const toggleFormat = (f: Format) => {
     setFormats((prev) =>
@@ -114,6 +138,16 @@ export function BatchSyncTab() {
     const exc = excludeTags.split(',').map((s) => s.trim()).filter(Boolean);
     if (inc.length) body.includeTags = inc;
     if (exc.length) body.excludeTags = exc;
+
+    // Per-URL cookies: when ANY of the per-URL cookie fields is non-empty,
+    // send the cookies array aligned with `urls` (length must match).
+    // Empty entries are sent as empty strings (no cookie for that URL).
+    // When ALL fields are empty, don't send the cookies field at all
+    // (the backend will treat it as no cookies for any URL).
+    const hasAnyCookie = perUrlCookies.some((c) => c.trim().length > 0);
+    if (hasAnyCookie && perUrlCookies.length === list.length) {
+      body.cookies = perUrlCookies.map((c) => c.trim());
+    }
 
     const r = await callApi<BatchResponse>(
       { method: 'POST', path: '/v2/scrape/batch', body },
@@ -185,10 +219,67 @@ export function BatchSyncTab() {
             <Settings2 className="h-3.5 w-3.5" />
             {advancedOpen ? t('btn.hide') : t('btn.options')}
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setCookiesOpen((v) => !v)}
+          >
+            <Cookie className="h-3.5 w-3.5" />
+            {cookiesOpen ? t('btn.hide') : (t('label.cookies') || 'Cookies')}
+          </Button>
           <Badge variant="outline" className="font-mono">
             {fmt(t('misc.Nurls'), { N: urlCount })}
           </Badge>
         </div>
+
+        {cookiesOpen && (
+          <div className="mt-4 rounded-md border border-amber-200/60 bg-amber-50/40 p-3 dark:border-amber-800/50 dark:bg-amber-900/10">
+            <Label className="mb-2 block text-xs font-medium text-amber-800 dark:text-amber-200">
+              {t('label.perUrlCookies') || 'Per-URL cookies (one field per URL above, aligned by index)'}
+            </Label>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              {t('label.perUrlCookiesHint') || 'Each URL receives ONLY its own cookies — no leakage between URLs in the batch. Leave a field empty to send no cookies for that URL.'}
+            </p>
+            <div className="max-h-64 overflow-y-auto rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+              {urlList.length === 0 ? (
+                <p className="px-2 py-3 text-xs text-muted-foreground">
+                  {t('empty.addUrlFirst') || 'Add at least one URL above to enable per-URL cookie inputs.'}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {urlList.map((u, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span
+                        className="mt-1.5 inline-block w-6 shrink-0 text-right font-mono text-[10px] text-muted-foreground"
+                        title={`Cookie for URL #${i + 1}`}
+                      >
+                        #{i + 1}
+                      </span>
+                      <div className="flex-1">
+                        <div className="mb-1 truncate font-mono text-[10px] text-muted-foreground">{u}</div>
+                        <Input
+                          type="text"
+                          placeholder="session=abc; token=xyz"
+                          value={perUrlCookies[i] ?? ''}
+                          onChange={(e) =>
+                            setPerUrlCookies((prev) => {
+                              const next = [...prev];
+                              while (next.length <= i) next.push('');
+                              next[i] = e.target.value;
+                              return next;
+                            })
+                          }
+                          className="h-8 font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {advancedOpen && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">

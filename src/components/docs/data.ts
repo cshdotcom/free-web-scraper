@@ -241,6 +241,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
       { name: 'excludeTags', type: 'string[]', required: false, default: '[]', description: 'Same as /v2/scrape.' },
       { name: 'timeout', type: 'number', required: false, default: '45000', description: 'Per-URL timeout (ms).' },
       { name: 'maxRetries', type: 'number', required: false, default: '2', description: 'Per-URL retry count.' },
+      {
+        name: 'cookies',
+        type: 'string | CookieInput[] | (string | CookieInput[])[]',
+        required: false,
+        default: '—',
+        description: 'Cookies for the batch — three forms accepted. (1) SHARED: a single string "k=v; k2=v2" or CookieInput[] applied to ALL urls. (2) PER-URL: an array whose length matches urls.length, where each entry is a string or CookieInput[] applied to that specific URL only (alignment by index). (3) MIXED: array of length 1 is treated as shared (the single cookie for all). Every URL still gets its OWN fresh browser context — no cookie leakage between URLs in the batch.',
+      },
     ],
     requestExample: JSON.stringify(
       {
@@ -309,6 +316,13 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         required: false,
         default: '—',
         description: 'Per-job concurrency cap (Firecrawl-compatible). When omitted, the job uses the default background concurrency from config.',
+      },
+      {
+        name: 'cookies',
+        type: 'string | CookieInput[] | (string | CookieInput[])[]',
+        required: false,
+        default: '—',
+        description: 'Cookies for the batch — three forms accepted (same as /v2/scrape/batch). (1) SHARED: a single string "k=v; k2=v2" or CookieInput[] applied to ALL urls. (2) PER-URL: an array whose length matches urls.length, where each entry is a string or CookieInput[] applied to that specific URL only (alignment by index). (3) MIXED: array of length 1 is treated as shared (the single cookie for all). Every URL still gets its OWN fresh browser context — no cookie leakage between URLs in the batch.',
       },
     ],
     requestExample: JSON.stringify(
@@ -503,8 +517,8 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         name: 'sitemapDepth',
         type: 'number',
         required: false,
-        default: '3',
-        description: 'Sitemap recursion depth (0-10). When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows sitemapindex files up to this depth. 0 disables recursion. No manual sitemap path required.',
+        default: '5',
+        description: 'Sitemap recursion depth (0-10). ONLY counts sitemap-index recursion (sitemapindex → sitemapindex → urlset). Article internal links are NOT counted — they are followed by the BFS crawl\'s own maxDepth. Default 5. 0 disables recursion. When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows nested sitemapindex files up to this depth. Each hop from one sitemapindex to another sitemapindex or urlset consumes one level. No manual sitemap path required.',
       },
       {
         name: 'sitemapPath',
@@ -535,11 +549,25 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         description: 'Per-job concurrency cap. When omitted, the job uses the default background concurrency.',
       },
       {
+        name: 'cookies',
+        type: 'string | CookieInput[]',
+        required: false,
+        default: '—',
+        description: 'Cookies to inject before navigation (same as /v2/scrape). Applied to the SEED URL and every discovered URL whose hostname does not have a `cookiesByDomain` entry. Every page gets its OWN fresh browser context — no cookie leakage between pages.',
+      },
+      {
+        name: 'cookiesByDomain',
+        type: 'Record<string, string | CookieInput[]>',
+        required: false,
+        default: '—',
+        description: 'Per-domain cookies for crawled URLs. A map of hostname → cookie string or CookieInput[]. When a discovered URL\'s hostname matches a key, those cookies OVERRIDE any shared `cookies` field. Subdomain fallback: if shop.uk.example.com is not in the map, the longest matching parent (e.g. uk.example.com) is tried. URLs whose hostname matches no key fall back to the shared `cookies` field. Example: { "admin.example.com": "session=admin_abc", "shop.example.com": "session=shop_xyz" }.',
+      },
+      {
         name: 'scrapeOptions',
         type: 'object',
         required: false,
         default: '{ formats: ["markdown"], onlyMainContent: true, device: "auto" }',
-        description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, mobile, cookies (string or array, isolated per request), userAgent, actions, location, headers, includeTags, excludeTags, timeout, waitFor, maxRetries.',
+        description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, mobile, cookies (string or array, isolated per request), cookiesByDomain (per-domain override map), userAgent, actions, location, headers, includeTags, excludeTags, timeout, waitFor, maxRetries.',
       },
     ],
     requestExample: JSON.stringify(

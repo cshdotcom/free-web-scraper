@@ -243,7 +243,21 @@ export function startBatchJob(
         const idx = cursor++;
         const url = urls[idx];
         try {
-          const r = await scrapeUrl({ ...(scrapeOpts as any), url });
+          // Per-URL cookies: when the caller passes `cookiesPerUrl`
+          // (an array aligned with urls[]), each URL receives ONLY its
+          // own cookies — never the cookies of any other URL in the
+          // batch. This is critical for multi-site batch jobs where
+          // each site needs its own session token.
+          // When `cookiesPerUrl` is present, it overrides any shared
+          // `cookies` field on scrapeOpts.
+          const opts = { ...(scrapeOpts as any) } as Record<string, unknown>;
+          if (Array.isArray(opts.cookiesPerUrl) && opts.cookiesPerUrl.length === urls.length) {
+            const perUrl = opts.cookiesPerUrl[idx];
+            if (perUrl != null) opts.cookies = perUrl;
+            else delete opts.cookies;
+            delete opts.cookiesPerUrl;
+          }
+          const r = await scrapeUrl({ ...opts, url });
           entry.data[idx] = { url, success: r.success, data: r.data, error: r.error };
           if (!r.success && r.error) {
             entry.errors.push({ url, error: r.error });
@@ -426,8 +440,14 @@ export function startCrawlJob(
     if (opts.sitemap !== 'skip' && seedParsed) {
       try {
         const ua = (opts.scrapeOpts.userAgent as string) || process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
+        // Default depth 5 — only counts sitemap-index recursion
+        // (sitemapindex → sitemapindex → ... → urlset). Article internal
+        // links do NOT consume sitemap depth: once a urlset is reached
+        // and content URLs are extracted, the crawl's own `maxDepth`
+        // (BFS depth) controls how deep article links are followed.
+        // See discoverSitemaps in sitemap.ts for details.
         const smResult = await discoverSitemaps(seedUrl, ua, {
-          depth: opts.sitemapDepth ?? 3,
+          depth: opts.sitemapDepth ?? 5,
           skipRobots: false,
           sitemapPath: opts.sitemapPath,
         });
@@ -474,13 +494,57 @@ export function startCrawlJob(
       entry.data[idx] = { url, success: false };
 
       try {
+        // Per-domain cookies: when `cookiesByDomain` is provided (a map
+        // of hostname → cookie string or CookieInput[]), each scraped URL
+        // receives the cookies matching its hostname (with sub-domain
+        // fallback). This is critical for crawling a site where each
+        // subdomain needs its own auth cookie (e.g. admin.example.com
+        // vs shop.example.com).
+        //
+        // Lookup precedence (first non-empty wins):
+        //   1. exact hostname match in cookiesByDomain
+        //   2. longest parent subdomain match (e.g. shop.uk.example.com
+        //      falls back to .uk.example.com if no exact match)
+        //
+        // When `cookiesByDomain` is provided, it OVERRIDES any shared
+        // `cookies` field on scrapeOpts for that URL. The shared
+        // `cookies` field still applies to URLs whose hostname is not
+        // in the map (so you can mix shared + per-domain cookies).
+        const scrapeCallOpts = { ...(opts.scrapeOpts as any) } as Record<string, unknown>;
+        if (scrapeCallOpts.cookiesByDomain && typeof scrapeCallOpts.cookiesByDomain === 'object') {
+          const byDomain = scrapeCallOpts.cookiesByDomain as Record<string, unknown>;
+          let hostname = '';
+          try { hostname = new URL(url).hostname; } catch { /* ignore */ }
+          if (hostname) {
+            // Try exact match first.
+            let matched: unknown = byDomain[hostname];
+            // Try progressively shorter parent subdomains.
+            if (matched == null) {
+              const parts = hostname.split('.');
+              for (let i = 1; i < parts.length; i++) {
+                const parent = parts.slice(i).join('.');
+                if (byDomain[parent] != null) {
+                  matched = byDomain[parent];
+                  break;
+                }
+              }
+            }
+            if (matched != null && matched !== '') {
+              scrapeCallOpts.cookies = matched;
+            } else if (scrapeCallOpts.cookies != null) {
+              // Keep shared cookies for unmatched hosts.
+            } else {
+              delete scrapeCallOpts.cookies;
+            }
+          }
+        }
         const r = await scrapeUrl({
-          ...(opts.scrapeOpts as any),
+          ...scrapeCallOpts,
           url,
-          formats: Array.from(new Set([...(opts.scrapeOpts.formats as string[] || ['markdown']), 'links'])),
+          formats: Array.from(new Set([...((scrapeCallOpts.formats as string[]) || ['markdown']), 'links'])),
           ignoreRobotsTxt: opts.ignoreRobotsTxt,
           followNofollow: opts.followNofollow,
-        });
+        } as any);
         entry.data[idx] = { url, success: r.success, data: r.data, error: r.error };
         if (!r.success && r.error) entry.errors.push({ url, error: r.error });
 

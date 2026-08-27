@@ -306,13 +306,23 @@ export function fallbackExtract(rawHtml: string, sourceURL: string): { contentHt
   }
 
   let content = '';
-  const articleMatch = html.match(/<article[\s\S]*?<\/article>/i);
-  if (articleMatch) {
-    content = articleMatch[0];
+  // Collect ALL <article> elements (not just the first one) — many news
+  // sites (nature.com, nytimes, etc.) wrap each story card in its own
+  // <article> tag, so matching only the first one loses 90% of the
+  // content. When multiple articles are present, concatenate them
+  // inside a wrapper <div> so turndown flattens them in order.
+  const articleMatches = html.match(/<article[\s\S]*?<\/article>/gi);
+  if (articleMatches && articleMatches.length > 0) {
+    content = articleMatches.length === 1
+      ? articleMatches[0]
+      : `<div data-extracted="articles">\n${articleMatches.join('\n')}\n</div>`;
   } else {
-    const mainMatch = html.match(/<main[\s\S]*?<\/main>/i);
-    if (mainMatch) {
-      content = mainMatch[0];
+    // Same for <main> — concatenate when multiple.
+    const mainMatches = html.match(/<main[\s\S]*?<\/main>/gi);
+    if (mainMatches && mainMatches.length > 0) {
+      content = mainMatches.length === 1
+        ? mainMatches[0]
+        : `<div data-extracted="mains">\n${mainMatches.join('\n')}\n</div>`;
     } else {
       const bodyMatch = html.match(/<body[\s\S]*?<\/body>/i);
       content = bodyMatch ? bodyMatch[0] : html;

@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Globe, Play, Square, Loader2, CheckCircle2, Timer } from 'lucide-react';
+import { Globe, Play, Square, Loader2, CheckCircle2, Timer, Cookie } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
@@ -90,6 +90,16 @@ export function CrawlTab() {
   const [allowSubdomains, setAllowSubdomains] = React.useState(false);
   const [crawlEntireDomain, setCrawlEntireDomain] = React.useState(false);
   const [ignoreQueryParams, setIgnoreQueryParams] = React.useState(false);
+  // Cookies: a single cookie string applied to the seed + every crawled
+  // URL whose hostname isn't in cookiesByDomain. Optional.
+  const [cookies, setCookies] = React.useState('');
+  // cookiesByDomain: a JSON object mapping hostname → cookie string. Each
+  // crawled URL whose hostname matches a key (or a parent subdomain) gets
+  // those cookies instead of the shared `cookies`. Useful for crawling
+  // sites with per-subdomain auth cookies. JSON syntax validated client-side.
+  const [cookiesByDomain, setCookiesByDomain] = React.useState('');
+  // Toggle for the cookies section (collapsed by default).
+  const [cookiesOpen, setCookiesOpen] = React.useState(false);
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<CrawlStatus | null>(null);
@@ -171,13 +181,38 @@ export function CrawlTab() {
     // Never send an empty formats list — fall back to markdown so the crawl
     // is always valid even if the user toggled everything off.
     const selectedFormats = formats.length ? formats : (['markdown'] as Format[]);
+    const scrapeOpts: Record<string, unknown> = {
+      formats: selectedFormats,
+      onlyMainContent: true,
+      device,
+    };
+    // Add cookies (string) to scrapeOptions when provided.
+    if (cookies.trim()) scrapeOpts.cookies = cookies.trim();
+    // Parse cookiesByDomain as JSON when provided.
+    if (cookiesByDomain.trim()) {
+      try {
+        const parsed = JSON.parse(cookiesByDomain);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          scrapeOpts.cookiesByDomain = parsed;
+        } else {
+          setError('cookiesByDomain must be a JSON object, e.g. {"sub.example.com":"k=v"}');
+          setStarting(false);
+          return;
+        }
+      } catch (e) {
+        setError(`Invalid cookiesByDomain JSON: ${(e as Error).message}`);
+        setStarting(false);
+        return;
+      }
+    }
+
     const body: Record<string, unknown> = {
       url: url.trim(),
       maxDepth,
       limit,
       sitemap,
       sitemapDepth,
-      scrapeOptions: { formats: selectedFormats, onlyMainContent: true, device },
+      scrapeOptions: scrapeOpts,
     };
     if (sitemapPath.trim()) body.sitemapPath = sitemapPath.trim();
     // Firecrawl-compatible path-filter aliases.
@@ -479,10 +514,21 @@ export function CrawlTab() {
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {!jobId ? (
-            <LoadingButton loading={starting} onClick={onStart} className="gap-1.5">
-              <Play className="h-3.5 w-3.5" />
-              {t('btn.startCrawl')}
-            </LoadingButton>
+            <>
+              <LoadingButton loading={starting} onClick={onStart} className="gap-1.5">
+                <Play className="h-3.5 w-3.5" />
+                {t('btn.startCrawl')}
+              </LoadingButton>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setCookiesOpen((v) => !v)}
+              >
+                <Cookie className="h-3.5 w-3.5" />
+                {cookiesOpen ? t('btn.hide') : (t('label.cookies') || 'Cookies')}
+              </Button>
+            </>
           ) : (
             <>
               {running && (
@@ -497,6 +543,48 @@ export function CrawlTab() {
             </>
           )}
         </div>
+
+        {cookiesOpen && !jobId && (
+          <div className="mt-4 rounded-md border border-amber-200/60 bg-amber-50/40 p-3 dark:border-amber-800/50 dark:bg-amber-900/10">
+            <Label className="mb-2 block text-xs font-medium text-amber-800 dark:text-amber-200">
+              {t('label.cookies') || 'Cookies'}
+            </Label>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              {t('label.crawlCookiesHint') || 'The shared cookie below is applied to the seed URL and every crawled URL whose hostname is not in cookiesByDomain. For per-subdomain cookies, fill in cookiesByDomain as a JSON object. Every page gets its OWN fresh browser context — no cookie leakage between pages.'}
+            </p>
+            <div className="space-y-3">
+              <div>
+                <Label htmlFor="cl-cookie" className="mb-1 block text-xs font-medium text-muted-foreground">
+                  {t('label.sharedCookies') || 'Shared cookies (applied to all URLs not in cookiesByDomain)'}
+                </Label>
+                <Input
+                  id="cl-cookie"
+                  type="text"
+                  placeholder="session=abc; token=xyz"
+                  value={cookies}
+                  onChange={(e) => setCookies(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div>
+                <Label htmlFor="cl-cbd" className="mb-1 block text-xs font-medium text-muted-foreground">
+                  {t('label.cookiesByDomain') || 'cookiesByDomain (JSON: hostname → cookie string)'}
+                </Label>
+                <Textarea
+                  id="cl-cbd"
+                  rows={3}
+                  placeholder={'{\n  "admin.example.com": "session=admin_abc",\n  "shop.example.com": "session=shop_xyz"\n}'}
+                  value={cookiesByDomain}
+                  onChange={(e) => setCookiesByDomain(e.target.value)}
+                  className="font-mono text-xs"
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {t('label.cookiesByDomainHint') || 'Subdomain fallback: if shop.uk.example.com is not a key, the longest matching parent (e.g. uk.example.com) is tried. URLs whose hostname matches no key fall back to the shared cookie above.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Job state */}

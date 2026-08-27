@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Play, Loader2, CheckCircle2, Timer, ListChecks } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, Timer, ListChecks, Cookie, Settings2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
@@ -64,6 +64,9 @@ export function BatchAsyncTab() {
   const [timeout, setTimeout_] = React.useState(45000);
   const [maxRetries, setMaxRetries] = React.useState(2);
   const [device, setDevice] = React.useState<'auto' | 'desktop' | 'mobile'>('auto');
+  // Per-URL cookies (aligned with URL list by line index).
+  const [perUrlCookies, setPerUrlCookies] = React.useState<string[]>(['', '', '']);
+  const [cookiesOpen, setCookiesOpen] = React.useState(false);
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<BatchStatus | null>(null);
@@ -71,6 +74,20 @@ export function BatchAsyncTab() {
   const [error, setError] = React.useState<string | null>(null);
   const abortRef = React.useRef<AbortController | null>(null);
   const pollRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const urlList = React.useMemo(
+    () => urls.split('\n').map((s) => s.trim()).filter(Boolean),
+    [urls],
+  );
+
+  React.useEffect(() => {
+    setPerUrlCookies((prev) => {
+      const next = new Array(urlList.length).fill('');
+      for (let i = 0; i < Math.min(prev.length, urlList.length); i++) next[i] = prev[i];
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+      return next;
+    });
+  }, [urlList.length]);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -121,18 +138,27 @@ export function BatchAsyncTab() {
     setStatus(null);
     setJobId(null);
 
+    const body: Record<string, unknown> = {
+      urls: list,
+      formats: ['markdown'],
+      onlyMainContent: true,
+      timeout,
+      maxRetries,
+      device,
+    };
+
+    // Per-URL cookies: when ANY cookie field is non-empty, send the
+    // array aligned with `urls` (length must match).
+    const hasAnyCookie = perUrlCookies.some((c) => c.trim().length > 0);
+    if (hasAnyCookie && perUrlCookies.length === list.length) {
+      body.cookies = perUrlCookies.map((c) => c.trim());
+    }
+
     const r = await callApi<{ success: boolean; id?: string; error?: string }>(
       {
         method: 'POST',
         path: '/v2/batch/scrape',
-        body: {
-          urls: list,
-          formats: ['markdown'],
-          onlyMainContent: true,
-          timeout,
-          maxRetries,
-          device,
-        },
+        body,
       },
       authHeaders(),
     );
@@ -258,10 +284,69 @@ export function BatchAsyncTab() {
               {t('btn.reset')}
             </Button>
           )}
+          {!jobId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setCookiesOpen((v) => !v)}
+            >
+              <Cookie className="h-3.5 w-3.5" />
+              {cookiesOpen ? t('btn.hide') : (t('label.cookies') || 'Cookies')}
+            </Button>
+          )}
           <Badge variant="outline" className="font-mono">
             {fmt(t('misc.Nurls'), { N: urlCount })}
           </Badge>
         </div>
+
+        {cookiesOpen && !jobId && (
+          <div className="mt-4 rounded-md border border-amber-200/60 bg-amber-50/40 p-3 dark:border-amber-800/50 dark:bg-amber-900/10">
+            <Label className="mb-2 block text-xs font-medium text-amber-800 dark:text-amber-200">
+              {t('label.perUrlCookies') || 'Per-URL cookies (one field per URL above, aligned by index)'}
+            </Label>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              {t('label.perUrlCookiesHint') || 'Each URL receives ONLY its own cookies — no leakage between URLs in the batch. Leave a field empty to send no cookies for that URL.'}
+            </p>
+            <div className="max-h-64 overflow-y-auto rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+              {urlList.length === 0 ? (
+                <p className="px-2 py-3 text-xs text-muted-foreground">
+                  {t('empty.addUrlFirst') || 'Add at least one URL above to enable per-URL cookie inputs.'}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {urlList.map((u, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span
+                        className="mt-1.5 inline-block w-6 shrink-0 text-right font-mono text-[10px] text-muted-foreground"
+                        title={`Cookie for URL #${i + 1}`}
+                      >
+                        #{i + 1}
+                      </span>
+                      <div className="flex-1">
+                        <div className="mb-1 truncate font-mono text-[10px] text-muted-foreground">{u}</div>
+                        <Input
+                          type="text"
+                          placeholder="session=abc; token=xyz"
+                          value={perUrlCookies[i] ?? ''}
+                          onChange={(e) =>
+                            setPerUrlCookies((prev) => {
+                              const next = [...prev];
+                              while (next.length <= i) next.push('');
+                              next[i] = e.target.value;
+                              return next;
+                            })
+                          }
+                          className="h-8 font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
