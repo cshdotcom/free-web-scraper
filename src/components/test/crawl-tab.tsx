@@ -86,6 +86,10 @@ export function CrawlTab() {
   // 'only' = ONLY use sitemap URLs; no on-page link following.
   const [sitemap, setSitemap] = React.useState<'include' | 'skip' | 'only'>('include');
   const [sitemapDepth, setSitemapDepth] = React.useState(5);
+  // Total URLs to extract from sitemap. 0 = unlimited (default).
+  // Caps the total number of URLs pulled from sitemap files. Useful for
+  // sites with huge sitemaps where you only want the first N URLs.
+  const [sitemapLimit, setSitemapLimit] = React.useState(0);
   const [sitemapPath, setSitemapPath] = React.useState('');
   const [allowSubdomains, setAllowSubdomains] = React.useState(false);
   const [crawlEntireDomain, setCrawlEntireDomain] = React.useState(false);
@@ -132,23 +136,44 @@ export function CrawlTab() {
   };
 
   // Poll the crawl status every 2s until terminal.
+  // Tolerates transient errors: when a poll fails (network blip,
+  // gateway timeout, slow sitemap response that returns 502),
+  // we DON'T immediately surface the error — instead we retry
+  // on the next 2s tick. Only surface a real error after several
+  // consecutive failures, so a slow sitemap discovery (30-60s)
+  // doesn't make the frontend give up and ask the user to reload.
   const poll = React.useCallback(
     (id: string) => {
       abortRef.current = new AbortController();
+      let consecutiveFailures = 0;
       const tick = async () => {
         const r = await callApi<CrawlStatus>(
           { method: 'GET', path: `/v2/crawl/${id}`, signal: abortRef.current!.signal },
           authHeaders(),
         );
         // Ignore abort errors (triggered by stopPolling / new crawl / cancel).
-        // The user doesn't need to see "Poll failed" when they intentionally
-        // stopped the previous crawl.
         if (abortRef.current?.signal.aborted) return;
         if (!r.ok) {
-          setError(r.error || 'Poll failed');
-          setStatus(null);
+          consecutiveFailures += 1;
+          // Tolerate up to 10 consecutive failures (~20s of errors)
+          // before surfacing the error to the user. This is critical
+          // because the backend's sitemap discovery can take 30-60s
+          // on slow sites, and the in-memory job entry may briefly
+          // return an empty response during that window. Without this
+          // tolerance, the frontend would suddenly report "Poll
+          // failed — please reload" even though the job is making
+          // progress on the backend.
+          if (consecutiveFailures >= 10) {
+            setError(r.error || 'Polling failed for 20+ seconds — the backend may be unreachable');
+            setStatus(null);
+            return;
+          }
+          // Otherwise, swallow this failure and retry on the next tick.
+          pollRef.current = setTimeout(tick, 2000);
           return;
         }
+        // Success — reset the failure counter.
+        consecutiveFailures = 0;
         setStatus(r.data);
         if (
           r.data?.status === 'completed' ||
@@ -212,6 +237,10 @@ export function CrawlTab() {
       limit,
       sitemap,
       sitemapDepth,
+      // 0 = unlimited (extract every URL found up to `limit`).
+      // Frontend default is 0; the user can raise it to cap the
+      // total number of URLs pulled from the sitemap.
+      sitemapLimit: typeof sitemapLimit === 'number' && sitemapLimit > 0 ? sitemapLimit : 0,
       scrapeOptions: scrapeOpts,
     };
     if (sitemapPath.trim()) body.sitemapPath = sitemapPath.trim();
@@ -421,6 +450,25 @@ export function CrawlTab() {
               onChange={(e) => setSitemapDepth(Math.max(0, Math.min(10, Number(e.target.value) || 0)))}
               disabled={!!jobId || sitemap === 'skip'}
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              ONLY counts sitemap-index recursion (sitemapindex → sitemapindex → urlset). Article URLs extracted from a urlset do NOT consume depth — they&apos;re followed by the BFS crawl&apos;s own maxDepth.
+            </p>
+          </div>
+          <div>
+            <Label htmlFor="crawl-sitemap-limit" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Sitemap URL limit (0 = unlimited, default 0)
+            </Label>
+            <Input
+              id="crawl-sitemap-limit"
+              type="number"
+              min={0}
+              value={sitemapLimit}
+              onChange={(e) => setSitemapLimit(Math.max(0, Number(e.target.value) || 0))}
+              disabled={!!jobId || sitemap === 'skip'}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Caps total URLs extracted from sitemap. 0 = unlimited (extract every URL found, subject to the crawl&apos;s own limit). Set to a positive number to stop parsing after N URLs (useful for huge sitemaps).
+            </p>
           </div>
           <div className="sm:col-span-2">
             <Label htmlFor="crawl-sitemap-path" className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -614,6 +662,11 @@ export function CrawlTab() {
               {running && (
                 <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                   <Timer className="h-3 w-3" /> {t('status.pollingEvery2s')}
+                </span>
+              )}
+              {status.status === 'pending' && (
+                <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
+                  Discovering sitemap URLs (this can take 30-60s on slow sites)…
                 </span>
               )}
             </div>

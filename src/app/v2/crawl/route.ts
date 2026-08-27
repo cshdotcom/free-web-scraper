@@ -48,8 +48,19 @@ export async function POST(request: NextRequest) {
     : body.sitemap === 'only' ? 'only'
     : 'include';
   // Sitemap recursion depth: how deep to follow sitemapindex files.
-  // Default 3, max 10. Frontend + API both expose this.
+  // Default 5, max 10. ONLY counts sitemap-index recursion (sitemapindex
+  // → sitemapindex → urlset). Article internal links found inside a
+  // urlset are NOT counted — they are followed by the BFS crawl's own
+  // maxDepth. Frontend + API both expose this.
   const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 5, 0), 10);
+
+  // Total URLs to extract from sitemap. 0 = unlimited (default).
+  // Caps the total number of URLs pulled from sitemap files. Useful for
+  // sites with huge sitemaps where you only want the first N URLs.
+  // Applied AFTER the BFS scope checks (followable, in-scope, matches
+  // filters). Negative values are treated as 0 (unlimited).
+  const sitemapLimitRaw = typeof body.sitemapLimit === 'number' ? body.sitemapLimit : 0;
+  const sitemapLimit = Math.max(sitemapLimitRaw, 0);
 
   // Explicit sitemap path (URL or relative path). When provided, the
   // crawler fetches this URL and auto-detects:
@@ -68,7 +79,7 @@ export async function POST(request: NextRequest) {
   const {
     urls: _u, url: _url, limit: _l, maxDepth: _md, maxDiscoveryDepth: _mdd,
     includes: _inc, excludes: _exc, includePaths: _ip, excludePaths: _ep,
-    sitemapPath: _smPath, sitemapDepth: _smDepth,
+    sitemapPath: _smPath, sitemapDepth: _smDepth, sitemapLimit: _smLimit,
     scrapeOptions, ...restScrapeOpts
   } = body;
   const scrapeOpts = { ...(scrapeOptions || {}), ...restScrapeOpts };
@@ -81,6 +92,7 @@ export async function POST(request: NextRequest) {
     scrapeOpts,
     sitemap,
     sitemapDepth,
+    sitemapLimit,
     sitemapPath,
     allowSubdomains: body.allowSubdomains ?? false,
     allowExternalLinks: body.allowExternalLinks ?? false,

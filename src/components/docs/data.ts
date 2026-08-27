@@ -518,7 +518,14 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         type: 'number',
         required: false,
         default: '5',
-        description: 'Sitemap recursion depth (0-10). ONLY counts sitemap-index recursion (sitemapindex → sitemapindex → urlset). Article internal links are NOT counted — they are followed by the BFS crawl\'s own maxDepth. Default 5. 0 disables recursion. When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows nested sitemapindex files up to this depth. Each hop from one sitemapindex to another sitemapindex or urlset consumes one level. No manual sitemap path required.',
+        description: 'Sitemap recursion depth (0-10). ONLY counts sitemap-index recursion (sitemapindex → sitemapindex → urlset). Article URLs extracted from a urlset are LEAVES from a sitemap perspective — we do NOT follow sitemap links from them. They are followed by the BFS crawl\'s own maxDepth. Example with depth=5: /sitemap_index.xml (depth 0) → /news-sitemap-index.xml (depth 1) → /news-2025.xml (depth 2, urlset → article URLs extracted). 0 disables recursion. Default 5. When `sitemap` is "include" or "only", the crawler auto-discovers sitemaps via /robots.txt Sitemap: lines + common paths (/sitemap.xml, /sitemap_index.xml, etc.) + <link rel="sitemap"> hints, then recursively follows nested sitemapindex files up to this depth. Each hop from one sitemapindex to another sitemapindex or urlset consumes one level. No manual sitemap path required.',
+      },
+      {
+        name: 'sitemapLimit',
+        type: 'number',
+        required: false,
+        default: '0 (unlimited)',
+        description: 'Caps the total number of URLs extracted from the sitemap. 0 = unlimited (default — extract every URL found, subject to the crawl\'s own `limit`). Set to a positive number to stop parsing after N URLs. Useful for sites with huge sitemaps where you only want the first N URLs. Applied AFTER the BFS scope checks (followable, in-scope, matches filters) — so N is the count of URLs that pass all filters, not the raw sitemap URL count. Negative values are treated as 0 (unlimited).',
       },
       {
         name: 'sitemapPath',

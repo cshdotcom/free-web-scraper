@@ -81,6 +81,18 @@ const MAX_SITEMAP_DEPTH = 10;
 /** Cap on entries returned from a single sitemap (memory guard). */
 const MAX_ENTRIES_PER_SITEMAP = 100_000;
 
+/** Hard cap on the number of child sitemaps we'll recursively fetch
+ *  from a single sitemap-index. Without this, a site with 40,000+
+ *  child sitemaps (e.g. nature.com) would take hours to fully
+ *  discover. When the user sets `sitemapLimit`, we stop even
+ *  sooner (as soon as we have N URLs). */
+const MAX_CHILD_SITEMAPS_PER_INDEX = 200;
+
+/** Hard cap on the TOTAL number of sitemap-index / urlset files
+ *  fetched across the whole discovery. Prevents runaway recursion
+ *  on adversarial or pathological sitemap structures. */
+const MAX_TOTAL_SITEMAP_FETCHES = 500;
+
 /** Common sitemap path candidates. */
 const COMMON_SITEMAP_PATHS = [
   '/sitemap.xml',
@@ -107,20 +119,26 @@ const CACHE_TTL = 60 * 60 * 1000;
  * @param seedUrl     The starting URL (used to derive the origin).
  * @param userAgent   UA to send when fetching sitemaps.
  * @param opts.depth  Max recursion depth for sitemap-index files
- *                    (default 3, max 10). `0` disables recursion.
+ *                    (default 5, max 10). `0` disables recursion.
  * @param opts.skipRobots When true, skip the robots.txt sitemap discovery.
  * @param opts.sitemapPath Explicit sitemap URL or link-list page URL.
  *                    When provided, we fetch it and auto-detect:
  *                    XML sitemap → parse as sitemap (with recursion);
  *                    HTML page → extract all <a href> links using
  *                    sitemapPath's directory as the base URL.
+ * @param opts.limit  Cap on total entries to extract (0 = unlimited).
+ *                    When set, we stop fetching more child sitemaps as
+ *                    soon as we have N entries. Useful for sites with
+ *                    40,000+ child sitemaps (e.g. nature.com) — without
+ *                    this, discovery would take hours.
  */
 export async function discoverSitemaps(
   seedUrl: string,
   userAgent: string,
-  opts: { depth?: number; skipRobots?: boolean; sitemapPath?: string } = {},
+  opts: { depth?: number; skipRobots?: boolean; sitemapPath?: string; limit?: number } = {},
 ): Promise<SitemapResult> {
   const depth = Math.min(Math.max(opts.depth ?? DEFAULT_SITEMAP_DEPTH, 0), MAX_SITEMAP_DEPTH);
+  const limit = typeof opts.limit === 'number' && opts.limit > 0 ? opts.limit : 0;
   let origin: string;
   let seedParsed: URL;
   try {
@@ -130,18 +148,26 @@ export async function discoverSitemaps(
     return { entries: [], sources: [], depth };
   }
 
-  // Check cache.
-  const cacheKey = `${origin}|${depth}|${opts.skipRobots ? '1' : '0'}|${opts.sitemapPath || ''}`;
+  // Check cache. The cache key includes the limit so a request with
+  // limit=10 doesn't reuse a cached result from a limit=1000 request.
+  const cacheKey = `${origin}|${depth}|${limit}|${opts.skipRobots ? '1' : '0'}|${opts.sitemapPath || ''}`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.result;
 
   const sources: string[] = [];
   const byUrl = new Map<string, SitemapEntry>();
   const visited = new Set<string>();
+  // Counters for the runaway-protection caps.
+  let totalSitemapFetches = 0;
+  let childSitemapCountThisIndex = 0;
 
   /** Add an entry, preserving metadata when already present. */
   const add = (e: SitemapEntry) => {
     if (byUrl.size >= MAX_ENTRIES_PER_SITEMAP) return;
+    // When `limit` is set, stop adding once we hit N. The check is
+    // here (not in processSitemap) so all callers short-circuit
+    // consistently.
+    if (limit > 0 && byUrl.size >= limit) return;
     const existing = byUrl.get(e.url);
     if (existing) {
       if (!existing.title && e.title) existing.title = e.title;
@@ -152,11 +178,21 @@ export async function discoverSitemaps(
     }
   };
 
+  /** Has the limit been reached? When true, callers should skip
+   *  fetching more sitemaps and break out of recursion. */
+  const limitReached = (): boolean => {
+    if (limit > 0 && byUrl.size >= limit) return true;
+    if (totalSitemapFetches >= MAX_TOTAL_SITEMAP_FETCHES) return true;
+    return false;
+  };
+
   /** Recursively process a sitemap (URL or sitemapindex). */
   const processSitemap = async (smUrl: string, currentDepth: number): Promise<void> => {
     if (visited.has(smUrl)) return;
     visited.add(smUrl);
     if (currentDepth > depth) return;
+    if (limitReached()) return;
+    totalSitemapFetches += 1;
     let resp;
     try {
       resp = await guardedFetch(smUrl, { headers: { 'User-Agent': userAgent, Accept: 'application/xml,text/xml,text/html,*/*' } });
@@ -170,12 +206,22 @@ export async function discoverSitemaps(
       // Sitemap-index: extract <sitemap><loc>...</loc><lastmod>...</lastmod></sitemap>
       const smRegex = /<sitemap>([\s\S]*?)<\/sitemap>/gi;
       let m: RegExpExecArray | null;
+      childSitemapCountThisIndex = 0;
       while ((m = smRegex.exec(text)) !== null) {
+        if (limitReached()) break;
+        // Hard cap per sitemap-index — nature.com has 40,093 child
+        // sitemaps in its main sitemap.xml, which would take hours
+        // to fully discover without this cap.
+        if (childSitemapCountThisIndex >= MAX_CHILD_SITEMAPS_PER_INDEX) {
+          sources.push(`sitemapindex[${currentDepth}]: truncated at ${MAX_CHILD_SITEMAPS_PER_INDEX} children (full count: ${text.match(/<sitemap>/gi)?.length || 'unknown'})`);
+          break;
+        }
         const block = m[1];
         const loc = block.match(/<loc>([^<]+)<\/loc>/i);
         if (!loc) continue;
         const childUrl = loc[1].trim();
         sources.push(`sitemapindex[${currentDepth}]: ${childUrl}`);
+        childSitemapCountThisIndex += 1;
         await processSitemap(childUrl, currentDepth + 1);
       }
       return;
@@ -186,6 +232,7 @@ export async function discoverSitemaps(
       const urlRegex = /<url>([\s\S]*?)<\/url>/gi;
       let mu: RegExpExecArray | null;
       while ((mu = urlRegex.exec(text)) !== null) {
+        if (limitReached()) break;
         const block = mu[1];
         const loc = block.match(/<loc>([^<]+)<\/loc>/i);
         if (!loc) continue;
@@ -209,6 +256,7 @@ export async function discoverSitemaps(
       if (byUrl.size === 0) {
         const locMatches = text.match(/<loc>([^<]+)<\/loc>/g) || [];
         for (const lm of locMatches) {
+          if (limitReached()) break;
           const u = lm.replace(/<\/?loc>/g, '').trim();
           if (u) add({ url: u });
         }

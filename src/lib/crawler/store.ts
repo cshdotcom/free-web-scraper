@@ -25,7 +25,7 @@ import { discoverSitemaps } from './sitemap';
  */
 
 export type JobType = 'crawl' | 'batch';
-export type JobStatus = 'scraping' | 'completed' | 'failed';
+export type JobStatus = 'pending' | 'scraping' | 'completed' | 'failed';
 
 export interface JobEntry {
   id: string;
@@ -314,8 +314,16 @@ export function startCrawlJob(
     /** Firecrawl-compatible: 'include' | 'skip' | 'only' */
     sitemap?: 'include' | 'skip' | 'only';
     /** Sitemap recursion depth (how deep to follow sitemapindex files).
-     *  Default 3, max 10. */
+     *  Default 5, max 10. ONLY counts sitemap-index recursion
+     *  (sitemapindex → sitemapindex → urlset). Article internal links
+     *  found inside a urlset are NOT counted as sitemap depth — they
+     *  are followed by the BFS crawl's own maxDepth. */
     sitemapDepth?: number;
+    /** Total URLs to extract from sitemap (after which we stop
+     *  parsing more sitemap files). 0 = unlimited. Default 0
+     *  (extract every URL found up to `limit`). Useful for sites
+     *  with huge sitemaps where you only want the first N URLs. */
+    sitemapLimit?: number;
     /** Explicit sitemap URL or link-list page URL. When provided, we
      *  fetch it and auto-detect: XML sitemap → parse as sitemap (with
      *  recursion); HTML page → extract all <a href> links, using
@@ -346,10 +354,13 @@ export function startCrawlJob(
   version: 'v1' | 'v2' = 'v1',
 ): { id: string; url: string } {
   const id = makeId('crawl');
+  // Start in 'pending' so the frontend shows a clear "preparing sitemap"
+  // state while we discover URLs. Once the BFS loop actually starts
+  // scraping pages, the status flips to 'scraping'.
   const entry: JobEntry = {
     id,
     type: 'crawl',
-    status: 'scraping',
+    status: 'pending',
     total: 1,
     completed: 0,
     data: [],
@@ -437,26 +448,52 @@ export function startCrawlJob(
     // on-page discovered URLs (or used exclusively when sitemap='only').
     // The crawler never needs the user to specify a sitemap path —
     // everything is auto-discovered. This mirrors Firecrawl's behaviour.
+    //
+    // DEPTH SEMANTICS (clarified in v4.0.6):
+    //   `sitemapDepth` ONLY counts sitemap-index recursion (sitemapindex
+    //   → sitemapindex → urlset). Once a urlset is reached and article
+    //   URLs are extracted, those article URLs are LEAVES from a sitemap
+    //   perspective — we do NOT follow sitemap links from them. The BFS
+    //   crawl's own `maxDepth` controls how deep article links are
+    //   followed (so an article's internal links can be crawled if
+    //   maxDepth > 1).
+    //
+    // SITEMAP LIMIT (new in v4.0.6):
+    //   `sitemapLimit` caps the total number of URLs extracted from the
+    //   sitemap. 0 = unlimited (extract every URL found, subject to the
+    //   crawl's own `limit`). Useful for sites with huge sitemaps where
+    //   you only want the first N URLs. Applied AFTER the BFS scope
+    //   checks (followable, in-scope, matches filters).
+    //
+    // The job's status stays 'pending' while we discover sitemap URLs
+    // (this can take 30-60s on slow sites). The frontend shows a clear
+    // "preparing sitemap" state. Once discovery completes (or fails),
+    // status flips to 'scraping' and the BFS loop starts.
     if (opts.sitemap !== 'skip' && seedParsed) {
       try {
         const ua = (opts.scrapeOpts.userAgent as string) || process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
-        // Default depth 5 — only counts sitemap-index recursion
-        // (sitemapindex → sitemapindex → ... → urlset). Article internal
-        // links do NOT consume sitemap depth: once a urlset is reached
-        // and content URLs are extracted, the crawl's own `maxDepth`
-        // (BFS depth) controls how deep article links are followed.
-        // See discoverSitemaps in sitemap.ts for details.
+        // Pass sitemapLimit through to discoverSitemaps so it can
+        // stop fetching more child sitemaps once we have N URLs.
+        // Without this, a site with 40,000+ child sitemaps (e.g.
+        // nature.com) would take hours to fully discover.
         const smResult = await discoverSitemaps(seedUrl, ua, {
           depth: opts.sitemapDepth ?? 5,
+          limit: opts.sitemapLimit ?? 0,
           skipRobots: false,
           sitemapPath: opts.sitemapPath,
         });
         // Seed the queue with sitemap-discovered URLs that pass the
         // scope + filter checks. Sitemap URLs are at depth 0 (same
         // level as the seed) so they get scraped first.
+        let added = 0;
+        const sitemapLimit = typeof opts.sitemapLimit === 'number' && opts.sitemapLimit > 0
+          ? opts.sitemapLimit
+          : 0; // 0 = unlimited
         for (const e of smResult.entries) {
           if (cancelled) break;
           if (entry.data.length + queue.length >= opts.limit) break;
+          // Apply sitemapLimit cap (0 = no cap).
+          if (sitemapLimit > 0 && added >= sitemapLimit) break;
           if (!isFollowable(e.url)) continue;
           if (!isPathInScope(e.url)) continue;
           if (!matchesFilters(e.url)) continue;
@@ -466,6 +503,7 @@ export function startCrawlJob(
           if (key === dedupeKey(seedUrl)) continue;
           queue.push({ url: e.url, depth: 0 });
           visited.add(key);
+          added += 1;
         }
         // Update total to reflect discovered sitemap URLs.
         entry.total = Math.min(queue.length, opts.limit);
@@ -477,6 +515,14 @@ export function startCrawlJob(
     // When sitemap='only', we DON'T follow on-page links (depth-1 BFS
     // is skipped — only sitemap-discovered URLs are scraped).
     const skipOnPageLinks = opts.sitemap === 'only';
+
+    // Flip status from 'pending' to 'scraping' — we're about to start
+    // processing URLs from the queue. The frontend uses this to switch
+    // its UI label from "preparing sitemap" to "scraping N pages".
+    if (entry.status === 'pending') {
+      entry.status = 'scraping';
+      void writeJobToDb(entry);
+    }
 
     while (queue.length > 0 && !cancelled && entry.data.length < opts.limit) {
       const { url, depth } = queue.shift()!;

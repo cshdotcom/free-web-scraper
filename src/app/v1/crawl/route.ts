@@ -20,13 +20,31 @@ export async function POST(request: NextRequest) {
   if (!url) return jsonResponse({ success: false, error: 'Missing required field: url' }, 400);
   const limit = Math.min(body.limit ?? config.defaultCrawlLimit, 50);
   const maxDepth = Math.min(body.maxDepth ?? config.defaultCrawlMaxDepth, 5);
-  const { urls: _u, url: _url, limit: _l, maxDepth: _md, includes, excludes, scrapeOptions, ...restScrapeOpts } = body;
+  // v1 alias — same sitemap options as /v2/crawl.
+  const sitemap: 'include' | 'skip' | 'only' =
+    body.sitemap === 'skip' ? 'skip'
+    : body.sitemap === 'only' ? 'only'
+    : 'include';
+  const sitemapDepth = Math.min(Math.max(typeof body.sitemapDepth === 'number' ? body.sitemapDepth : 5, 0), 10);
+  const sitemapLimit = Math.max(typeof body.sitemapLimit === 'number' ? body.sitemapLimit : 0, 0);
+  const sitemapPath: string | undefined = typeof body.sitemapPath === 'string' && body.sitemapPath.trim()
+    ? body.sitemapPath.trim()
+    : undefined;
+  const {
+    urls: _u, url: _url, limit: _l, maxDepth: _md, includes, excludes,
+    sitemap: _sm, sitemapDepth: _smD, sitemapLimit: _smL, sitemapPath: _smP,
+    scrapeOptions, ...restScrapeOpts
+  } = body;
   const scrapeOpts = { ...(scrapeOptions || {}), ...restScrapeOpts };
   const { id, url: pollUrl } = startCrawlJob(url, {
     maxDepth, limit,
     includePatterns: Array.isArray(includes) ? includes : [],
     excludePatterns: Array.isArray(excludes) ? excludes : [],
     scrapeOpts,
+    sitemap,
+    sitemapDepth,
+    sitemapLimit,
+    sitemapPath,
   }, 'v2');
   return jsonResponse({ success: true, id, url: rewriteJobUrl(pollUrl) });
 }
@@ -34,3 +52,4 @@ export async function POST(request: NextRequest) {
 export async function OPTIONS(request: NextRequest) {
   return handleCors(request) ?? new Response(null, { status: 204 });
 }
+

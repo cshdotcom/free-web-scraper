@@ -103,16 +103,31 @@ export function BatchAsyncTab() {
   const poll = React.useCallback(
     (id: string) => {
       abortRef.current = new AbortController();
+      // Tolerate transient poll failures (network blip, gateway
+      // timeout, slow response). Only surface an error after 10
+      // consecutive failures (~20s of errors) — same logic as the
+      // crawl-tab polling. Without this, a slow-responding batch
+      // job would suddenly report "Poll failed — please reload"
+      // even though the job is still making progress.
+      let consecutiveFailures = 0;
       const tick = async () => {
         const r = await callApi<BatchStatus>(
           { method: 'GET', path: `/v2/batch/scrape/${id}`, signal: abortRef.current!.signal },
           authHeaders(),
         );
+        if (abortRef.current?.signal.aborted) return;
         if (!r.ok) {
-          setError(r.error || 'Poll failed');
-          setStatus(null);
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 10) {
+            setError(r.error || 'Polling failed for 20+ seconds — the backend may be unreachable');
+            setStatus(null);
+            return;
+          }
+          // Swallow transient failures and retry on the next tick.
+          pollRef.current = setTimeout(tick, 2000);
           return;
         }
+        consecutiveFailures = 0;
         setStatus(r.data);
         if (
           r.data?.status === 'completed' ||
