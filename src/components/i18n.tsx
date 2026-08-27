@@ -157,6 +157,21 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'label.metadata': 'Metadata',
     'label.raw': 'Raw',
 
+    // Cookie-related labels (v4.0.5+)
+    'label.cookies': 'Cookies',
+    'label.perUrlCookies': 'Per-URL cookies (one field per URL above, aligned by index)',
+    'label.perUrlCookiesHint': 'Each URL receives ONLY its own cookies — no leakage between URLs in the batch. Leave a field empty to send no cookies for that URL.',
+    'label.sharedCookies': 'Shared cookies (applied to all URLs not in cookiesByDomain)',
+    'label.cookiesByDomain': 'cookiesByDomain (JSON: hostname → cookie string)',
+    'label.cookiesByDomainHint': 'Subdomain fallback: if shop.uk.example.com is not a key, the longest matching parent (e.g. uk.example.com) is tried. URLs whose hostname matches no key fall back to the shared cookie above.',
+    'label.crawlCookiesHint': 'The shared cookie below is applied to the seed URL and every crawled URL whose hostname is not in cookiesByDomain. For per-subdomain cookies, fill in cookiesByDomain as a JSON object. Every page gets its OWN fresh browser context — no cookie leakage between pages.',
+    'empty.addUrlFirst': 'Add at least one URL above to enable per-URL cookie inputs.',
+
+    // Sitemap labels (v4.0.6+)
+    'label.sitemapDepth': 'Sitemap depth (0–10, default 5)',
+    'label.sitemapLimit': 'Sitemap URL limit (0 = unlimited, default 0)',
+    'label.sitemapPath': 'Sitemap path (auto-detect: sitemap XML or HTML link list)',
+
     // Status
     'status.idle': 'Idle',
     'status.loading': 'Loading...',
@@ -372,6 +387,19 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'label.screenshot': '截图',
     'label.metadata': '元数据',
     'label.raw': '原始',
+
+    // Cookie + sitemap labels (中文)
+    'label.cookies': 'Cookies',
+    'label.perUrlCookies': '每URL cookies（按URL顺序对齐）',
+    'label.perUrlCookiesHint': '每个URL只收到自己的cookies——批量中URL之间不泄露。留空=该URL不发cookie。',
+    'label.sharedCookies': '共享 cookies（应用于所有不在 cookiesByDomain 中的URL）',
+    'label.cookiesByDomain': 'cookiesByDomain (JSON: 主机名 → cookie字符串)',
+    'label.cookiesByDomainHint': '子域名回退：如果 shop.uk.example.com 不是key，则尝试最长匹配的父域名。无匹配的URL使用共享cookie。',
+    'label.crawlCookiesHint': '下面的共享cookie应用于种子URL和所有不在cookiesByDomain中的URL。每个页面有独立的浏览器上下文——页面间不泄露cookie。',
+    'empty.addUrlFirst': '请先在上方添加至少一个URL以启用每URL cookie输入。',
+    'label.sitemapDepth': '站点地图深度 (0–10, 默认 5)',
+    'label.sitemapLimit': '站点地图URL上限 (0 = 无限, 默认 0)',
+    'label.sitemapPath': '站点地图路径 (自动检测: XML 或 HTML链接列表)',
 
     'status.idle': '空闲',
     'status.loading': '加载中…',

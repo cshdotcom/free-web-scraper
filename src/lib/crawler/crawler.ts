@@ -6,6 +6,7 @@ import { applyStealth, dismissCookieBanners, isRetryableStatus, sleep, isCloudfl
 import { guardUrl } from './url-guard';
 import { checkRobots, checkHeadersForAiOptOut, checkHtmlForAiOptOut } from './robots';
 import { impersonateFetch } from './curl-impersonate';
+import { discoverSitemaps } from './sitemap';
 
 export interface ScrapeOptions {
   url: string;
@@ -788,15 +789,57 @@ async function attemptScrape(
     let navResp: Response | null = null;
     if (prerenderedHtml) {
       console.log(`[crawler] Registering page.route() to inject curl-impersonate HTML at the real URL (status ${prerenderedStatus || 200})`);
-      // Intercept the main document request for this URL. Only fulfill
-      // the first document-type request (the navigation itself) so
-      // sub-resources (CSS/JS/images) and iframe documents fall through
-      // to the real network and can load normally.
+      // WAF fallback: the main document request is intercepted and
+      // fulfilled with curl-impersonate HTML. But ALL sub-resources
+      // (CSS/JS/images/fonts) will also go to the real server, which
+      // is WAF-blocking Playwright's Chromium. Those requests return
+      // 403/301 error pages instead of actual CSS/JS, so the page
+      // renders without styles.
+      //
+      // Fix: intercept ALL requests in the prerender path. Serve the
+      // main document from curl-impersonate HTML, and for sub-resources:
+      //   - CSS: try to fetch via curl-impersonate (same TLS fingerprint
+      //     that got the HTML) and serve the response.
+      //   - JS: same — fetch via curl-impersonate and serve.
+      //   - images/fonts/media: abort (they'd fail anyway and take 8s
+      //     each). The screenshot will show text without images, which
+      //     is better than a blank/unstyled page.
+      //
+      // This is a "proxy mode" — we use curl-impersonate as a
+      // sub-resource proxy that bypasses the WAF for every resource
+      // the page needs.
       let mainDocServed = false;
-      await page.route(url, async (route: import('playwright').Route) => {
+      // Build a set of URLs we've already proxied (avoid double-fetching).
+      const proxied = new Set<string>();
+
+      /** Fetch a sub-resource via curl-impersonate and return its body
+       *  + content-type. Returns null on failure. */
+      const proxyFetch = async (resourceUrl: string): Promise<{ body: Buffer; contentType: string } | null> => {
+        if (proxied.has(resourceUrl)) return null;
+        proxied.add(resourceUrl);
+        try {
+          // Use curl-impersonate for the sub-resource. This bypasses
+          // the WAF's TLS fingerprint check.
+          const result = await impersonateFetch(resourceUrl, params.userAgent, {
+            timeout: 10000,
+          });
+          if (result.success && result.body && result.body.length > 0) {
+            const ct = result.headers['content-type'] || 'application/octet-stream';
+            return { body: Buffer.from(result.body), contentType: ct };
+          }
+        } catch { /* best-effort */ }
+        return null;
+      };
+
+      // Intercept ALL requests for the prerender path.
+      await page.route('**/*', async (route: import('playwright').Route) => {
         try {
           const req = route.request();
-          if (!mainDocServed && req.resourceType() === 'document') {
+          const reqUrl = req.url();
+          const resourceType = req.resourceType();
+
+          // Main document: serve the cached curl-impersonate HTML.
+          if (!mainDocServed && resourceType === 'document' && (reqUrl === url || reqUrl === url.replace(/\/$/, ''))) {
             mainDocServed = true;
             await route.fulfill({
               status: prerenderedStatus || 200,
@@ -805,19 +848,42 @@ async function attemptScrape(
             });
             return;
           }
-          await route.continue();
-        } catch {
-          try { await route.continue(); } catch { /* ignore */ }
-        }
-      });
-      // When prerendering via page.route(), apply a short per-request
-      // timeout to all sub-resources so a single slow / failing request
-      // doesn't hold the page hostage. If the WAF blocks Playwright's
-      // Chromium, every sub-resource request fails fast instead of
-      // hanging for 45s each.
-      await page.route('**/*', async (route: import('playwright').Route) => {
-        try {
-          await route.continue({ timeout: 8000 });
+
+          // Sub-resources: proxy through curl-impersonate for CSS/JS
+          // (so the page renders with styles). Abort images/fonts/media
+          // (they'd fail against the WAF and take 8s each).
+          if (resourceType === 'stylesheet' || resourceType === 'script') {
+            const proxied = await proxyFetch(reqUrl);
+            if (proxied) {
+              await route.fulfill({
+                status: 200,
+                contentType: proxied.contentType,
+                body: proxied.body,
+              });
+              return;
+            }
+            // Fallback: empty 200 so the page doesn't hang.
+            await route.fulfill({ status: 200, contentType: resourceType === 'stylesheet' ? 'text/css' : 'application/javascript', body: '' });
+            return;
+          }
+
+          // Images, fonts, media: abort (they'd fail against WAF).
+          if (resourceType === 'image' || resourceType === 'font' || resourceType === 'media') {
+            await route.abort();
+            return;
+          }
+
+          // Other resource types (fetch, xhr, etc.): try proxy, abort on failure.
+          const proxiedResult = await proxyFetch(reqUrl);
+          if (proxiedResult) {
+            await route.fulfill({
+              status: 200,
+              contentType: proxiedResult.contentType,
+              body: proxiedResult.body,
+            });
+            return;
+          }
+          await route.abort();
         } catch {
           try { await route.abort(); } catch { /* ignore */ }
         }
@@ -851,9 +917,11 @@ async function attemptScrape(
       }
     }
 
-    // If we used prerendered HTML and got no navResp, synthesize the
-    // status code from curl-impersonate.
-    if (prerenderedHtml && !navResp && !statusCode) {
+    // If we used prerendered HTML, the real statusCode from the
+    // page.on('response') handler is WRONG — it captures the 301/403
+    // from Playwright's failed goto, not the 200 from curl-impersonate.
+    // Override it with the curl-impersonate status.
+    if (prerenderedHtml) {
       statusCode = prerenderedStatus || 200;
     }
 
@@ -1551,6 +1619,12 @@ export async function mapUrl(
     /** @deprecated use `sitemap` enum instead — kept for backward compat. */
     ignoreSitemap?: boolean;
     sitemap?: 'include' | 'skip' | 'only';
+    /** Sitemap recursion depth (0-10, default 5). */
+    sitemapDepth?: number;
+    /** Total URLs to extract from sitemap (0=unlimited, default 0). */
+    sitemapLimit?: number;
+    /** Explicit sitemap URL. When provided, auto-discovery is skipped. */
+    sitemapPath?: string;
     includeSubdomains?: boolean;
   } = {},
 ): Promise<MapResult> {
@@ -1577,8 +1651,15 @@ export async function mapUrl(
   // Try sitemap first (faster + more complete) unless explicitly skipped.
   if (sitemapMode !== 'skip') {
     try {
-      const sitemapEntries = await trySitemaps(baseUrl);
-      for (const e of sitemapEntries) {
+      // Use discoverSitemaps (same as crawl) which supports sitemapDepth,
+      // sitemapLimit, sitemapPath, and parallel fetching.
+      const ua = process.env.CRAWLER_BRAND_NAME || 'NodeByte Crawl';
+      const smResult = await discoverSitemaps(url, ua, {
+        depth: opts.sitemapDepth ?? 5,
+        limit: opts.sitemapLimit ?? 0,
+        sitemapPath: opts.sitemapPath,
+      });
+      for (const e of smResult.entries) {
         collected.set(e.url, { title: e.title, description: e.description });
       }
     } catch {

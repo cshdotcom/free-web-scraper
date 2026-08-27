@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Globe, Play, Square, Loader2, CheckCircle2, Timer, Cookie } from 'lucide-react';
+import { Globe, Play, Square, Loader2, CheckCircle2, Timer, Cookie, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTestConsole } from './store';
 import { callApi } from './api-client';
@@ -732,12 +732,14 @@ export function CrawlTab() {
               : availableFormats[0];
 
             return (
-              <div
+              <details
                 key={p.url + i}
-                className="overflow-hidden rounded-lg border border-zinc-200 bg-card dark:border-zinc-800"
+                className="overflow-hidden rounded-lg border border-zinc-200 bg-card dark:border-zinc-800 group"
+                open={i < 3}
               >
-                {/* Page header — url + optional title from metadata */}
-                <div className="flex items-start gap-2 border-b border-zinc-200 bg-zinc-50/60 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/30">
+                {/* Page header — url + optional title from metadata (clickable to collapse) */}
+                <summary className="flex cursor-pointer items-start gap-2 border-b border-zinc-200 bg-zinc-50/60 px-3 py-2 hover:bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/30 dark:hover:bg-zinc-900/50 [&::-webkit-details-marker]:hidden">
+                  <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform group-open:rotate-180" />
                   <span className="mt-0.5 font-mono text-[11px] text-zinc-400">
                     {String(i + 1).padStart(2, '0')}
                   </span>
@@ -784,7 +786,7 @@ export function CrawlTab() {
                       {p.data.strategy}
                     </Badge>
                   )}
-                </div>
+                </summary>
 
                 {/* Per-page format toggle buttons */}
                 {availableFormats.length > 0 && (
@@ -891,7 +893,7 @@ export function CrawlTab() {
                     </p>
                   )}
                 </div>
-              </div>
+              </details>
             );
           })}
         </div>

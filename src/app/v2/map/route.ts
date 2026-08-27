@@ -29,7 +29,10 @@ export async function POST(request: NextRequest) {
     // Pass both — the crawler resolves them in priority order.
     ignoreSitemap: body.ignoreSitemap,
     sitemap: sitemapEnum,
-    includeSubdomains: body.includeSubdomains ?? body.includeSubdomains ?? false,
+    sitemapDepth: typeof body.sitemapDepth === 'number' ? Math.min(Math.max(body.sitemapDepth, 0), 10) : undefined,
+    sitemapLimit: typeof body.sitemapLimit === 'number' ? Math.max(body.sitemapLimit, 0) : undefined,
+    sitemapPath: typeof body.sitemapPath === 'string' && body.sitemapPath.trim() ? body.sitemapPath.trim() : undefined,
+    includeSubdomains: body.includeSubdomains ?? false,
   });
   if (!result.success) return jsonResponse({ success: false, error: result.error }, 422);
   return jsonResponse({ success: true, links: result.links });
