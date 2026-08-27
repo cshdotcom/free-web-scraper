@@ -173,8 +173,13 @@ export async function impersonateFetch(
 function checkIsStatic(html: string, status: number, contentType: string): boolean {
   if (status < 200 || status >= 300) return false;
   if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) return false;
+  // Strip script/style and tags to get pure text length.
+  // Lowered from 200 → 50 chars so simple but valid pages like
+  // example.com (139 chars of text content) still get the fast path.
+  // Pages with < 50 chars of real text content are almost certainly
+  // empty/error/loading stubs that need Playwright to render.
   const text = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '').trim();
-  if (text.length < 200) return false;
+  if (text.length < 50) return false;
   const spaMarkers = ['id="root"', 'id="app"', 'id="__next"', '__NEXT_DATA__', '__NUXT__', 'data-reactroot', 'ng-app', 'data-vue-app'];
   for (const m of spaMarkers) { if (html.includes(m)) return false; }
   if (/cf-challenge|Just a moment|Checking your browser|cf-mitigated/i.test(html)) return false;

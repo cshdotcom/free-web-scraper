@@ -201,7 +201,7 @@ export interface ScrapeResult {
  * Attempt a single scrape of one URL. Handles stealth injection,
  * cookie-banner dismissal, content extraction, and markdown conversion.
  *
- * If the request fails with a retryable status (403/429/503), retries
+ * If the request fails with a retryable status (403/429/502/503), retries
  * with a fresh user agent + exponential backoff up to `maxRetries` times.
  */
 export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
@@ -404,6 +404,56 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
             data.links = filterNofollowLinks(impersonateResult.body, rawLinks);
           }
         }
+        // Attributes format on curl-impersonate fast path: extract via
+        // server-side regex (no browser needed). Firecrawl-compatible:
+        // selector → element, attribute → HTML attribute or property.
+        if (opts.attributes && opts.attributes.length > 0) {
+          try {
+            const out: Record<string, string[]> = {};
+            for (const spec of opts.attributes) {
+              const key = `${spec.selector}|${spec.attribute}`;
+              const sel = spec.selector;
+              const attr = spec.attribute;
+              // Use a simple regex to find matching elements.
+              // Tag selector like "title", "meta", "h1", etc.
+              const tagMatch = sel.match(/^([a-zA-Z][\w-]*)$/);
+              let matches: string[] = [];
+              if (tagMatch) {
+                const tag = tagMatch[1];
+                // Match opening tag + content + closing tag.
+                const elemRegex = new RegExp(
+                  `<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`,
+                  'gi'
+                );
+                let em: RegExpExecArray | null;
+                while ((em = elemRegex.exec(impersonateResult.body)) !== null) {
+                  const fullMatch = em[0];
+                  if (attr === 'textContent') {
+                    const txt = em[1].replace(/<[^>]+>/g, '').trim();
+                    if (txt) matches.push(txt);
+                  } else if (attr === 'innerHTML') {
+                    matches.push(em[1]);
+                  } else if (attr === 'outerHTML') {
+                    matches.push(fullMatch);
+                  } else {
+                    // Extract a specific attribute from the opening tag.
+                    const openTag = fullMatch.split('>')[0] + '>';
+                    const attrRegex = new RegExp(
+                      `\\b${attr}\\s*=\\s*["']([^"']*)["']`,
+                      'i'
+                    );
+                    const am = attrRegex.exec(openTag);
+                    if (am && am[1]) matches.push(am[1]);
+                  }
+                }
+              }
+              out[key] = matches;
+            }
+            data.attributes = out;
+          } catch {
+            // best-effort — attributes extraction failed
+          }
+        }
 
         return { success: true, data, attempts: 1 };
       }
@@ -443,15 +493,23 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       try { browser = await getBrowser(); } catch { /* give up */ }
     }
 
-    // ---- curl-impersonate WAF fallback (visual formats only) ----
-    // On the first retry attempt (attempt > 0) for visual format
-    // requests, lazily fetch curl-impersonate HTML to inject via
-    // page.route() — this lets us bypass TLS/WAF blocks that reject
-    // Playwright's Chromium fingerprint while still rendering the
-    // page at its real URL (so relative URLs and JS see the correct
-    // origin). For markdown-only requests, curl-impersonate was
-    // already tried up front (and is cached in impersonateHtml).
-    if (needsVisual && attempt > 0 && !impersonateTried && canUseImpersonate) {
+    // ---- curl-impersonate WAF fallback ----
+    // On retry attempts (attempt > 0), if we don't yet have cached
+    // curl-impersonate HTML, fetch it now to inject via page.route().
+    // This bypasses TLS/WAF blocks that reject Playwright's Chromium
+    // fingerprint while still loading the page at its real URL (so
+    // relative URLs and JS see the correct origin).
+    //
+    // For visual formats (screenshot/branding/images): the page.route()
+    // injection preserves the real URL context so the page renders
+    // normally with JS/CSS/images from the real origin.
+    //
+    // For markdown-only: we still try Playwright goto on the first
+    // attempt (to handle dynamic pages); if that's WAF-blocked, the
+    // curl-impersonate HTML here gets injected via page.route() and
+    // Playwright parses the rendered DOM (no real sub-resource loads
+    // are needed for markdown).
+    if (attempt > 0 && !impersonateHtml && !impersonateTried && canUseImpersonate) {
       console.log(`[crawler] Playwright goto was blocked (attempt ${attempt}) — fetching curl-impersonate HTML as WAF fallback`);
       try {
         const fbUa = impersonateUserAgent || pickDeviceProfile(impersonateDevice).userAgent;
@@ -543,9 +601,14 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     lastError = result.error || 'Unknown error';
 
     // Decide whether to retry.
+    // Three retryable patterns:
+    //   1. Standard retryable status (403/429/503/502)
+    //   2. Our own WAF-block detection triggered (error contains "WAF/block detected")
+    //   3. Network/timeout errors
     const status = result.data?.metadata?.statusCode ?? 0;
     const retryable =
       isRetryableStatus(status) ||
+      /WAF\/block detected|waf-block/i.test(lastError) ||
       /timeout|net::ERR_|ECONNRESET|socket hang up|Target page, context or browser has been closed|browser has been closed|Target closed/i.test(lastError);
 
     if (!retryable || attempt === maxRetries) {
@@ -903,7 +966,20 @@ async function attemptScrape(
               break;
             }
             case 'executeJavascript': {
-              const ret = await page.evaluate(act.script || 'null');
+              // Firecrawl compatibility: scripts can be passed in three
+              // forms — an expression (`document.title`), a function
+              // (`() => document.title`), or a function body containing
+              // `return` (`return document.title;`). Playwright's
+              // page.evaluate handles the first two but throws on the
+              // third (it tries to parse "return document.title;" as
+              // an expression statement, which is a SyntaxError). We
+              // detect the `return` form and wrap it in an IIFE so it
+              // executes correctly.
+              let script = (act.script || 'null').trim();
+              if (script.startsWith('return ') || /\breturn\b/.test(script.split('\n')[0])) {
+                script = `(function() { ${script} })()`;
+              }
+              const ret = await page.evaluate(script);
               actionJsReturns.push(ret);
               break;
             }
@@ -1023,26 +1099,52 @@ async function attemptScrape(
     }
 
     // ---- WAF block detection (retryable failure) ----
-    // If the navigation returned a WAF-block status code (403/429/503)
-    // AND we extracted almost no content, treat this as a retryable
-    // failure so the retry loop can fetch curl-impersonate HTML as a
-    // WAF fallback (visual formats) or try a different UA. We skip this
-    // when we already used prerenderedHtml (already in fallback mode) to
-    // avoid infinite loops.
-    if (
-      !prerenderedHtml &&
-      (statusCode === 403 || statusCode === 429 || statusCode === 503 || statusCode === 502) &&
-      extracted.contentHtml.replace(/<[^>]+>/g, '').trim().length < 500
-    ) {
-      console.log(`[crawler] WAF block detected (status ${statusCode}, content too short) — returning retryable failure`);
-      return {
-        success: false,
-        error: `WAF block detected (HTTP ${statusCode}, content too short) — will retry with curl-impersonate fallback`,
-        data: {
-          metadata: { ...extracted.metadata, statusCode, error: 'waf-block', sourceURL: url } as PageMetadata,
-          statusCode,
-        },
-      };
+    // Detect WAF-block patterns:
+    //   1. Status 403/429/502/503 + very short content (< 500 chars)
+    //   2. Status 403/429/502/503 + content matches known WAF error
+    //      page signatures (openresty, cloudflare, nginx, akamai, etc.)
+    //      even if the body is long (WAF pages can be a few KB)
+    //   3. Any status + raw HTML matches WAF challenge markers
+    //      (cf-challenge, "Just a moment", "Checking your browser")
+    //   4. Any status + content matches known WAF redirect/blocked
+    //      page text ("openresty", "Forbidden", "Request blocked",
+    //      "forbid_code", etc.) — this catches 301/302 redirects that
+    //      WAFs use to send bots to a "blocked" landing page
+    //   5. Very short content (< 200 chars) on any 3xx/4xx/5xx status —
+    //      catches degenerate cases where the page got replaced by a
+    //      stub error response
+    // All patterns trigger a retryable failure so the retry loop can
+    // fetch curl-impersonate HTML as a WAF fallback. We skip when
+    // already in fallback mode (prerenderedHtml) to avoid infinite loops.
+    if (!prerenderedHtml) {
+      const contentText = extracted.contentHtml.replace(/<[^>]+>/g, '').trim();
+      const rawHtmlLower = (extracted.rawHtml || extracted.contentHtml || '').toLowerCase();
+      const isWafStatusCode =
+        statusCode === 403 || statusCode === 429 || statusCode === 503 || statusCode === 502;
+      const isWafChallenge =
+        /cf-challenge|just a moment|checking your browser|cf-mitigated|attention required|cloudflare/.test(rawHtmlLower);
+      const isWafErrorPage =
+        /openresty|forbidden|access denied|request blocked|blocked by security|forbid_code|blocked referer|not authorized|security check/.test(rawHtmlLower);
+      const isShortContent = contentText.length < 200;
+      const isErrorStatus = statusCode >= 300 && statusCode < 600;
+      const shouldRetry =
+        (isWafStatusCode && contentText.length < 500) || // pattern 1
+        (isWafStatusCode && isWafErrorPage) || // pattern 2
+        isWafChallenge || // pattern 3 (any status)
+        (isWafErrorPage && isErrorStatus) || // pattern 4 (any error status + WAF text)
+        (isShortContent && isErrorStatus); // pattern 5 (short content on error status)
+
+      if (shouldRetry) {
+        console.log(`[crawler] WAF/block detected (status ${statusCode}, content ${contentText.length} chars, challenge=${isWafChallenge}, wafErr=${isWafErrorPage}, short=${isShortContent}) — returning retryable failure`);
+        return {
+          success: false,
+          error: `WAF/block detected (HTTP ${statusCode}, ${isWafChallenge ? 'challenge' : 'blocked'}) — will retry with curl-impersonate fallback`,
+          data: {
+            metadata: { ...extracted.metadata, statusCode, error: 'waf-block', sourceURL: url } as PageMetadata,
+            statusCode,
+          },
+        };
+      }
     }
 
     // ---- Layer 4: HTML <meta> AI opt-out check ----

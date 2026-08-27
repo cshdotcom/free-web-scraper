@@ -139,7 +139,7 @@ export function pickDeviceProfile(device: DeviceType = 'auto'): DeviceProfile {
   // standard for crawlers — Googlebot, Bingbot, etc. all use "Bot").
   // Preserve spaces: "NodeByte Bot" not "NodeByteBot".
   const botToken = brand.replace(/\s*Crawl\s*$/i, ' Bot').trim();
-  const version = '4.0.3';
+  const version = '4.0.4';
 
   let pool: string[];
   let viewports: typeof DESKTOP_VIEWPORTS;
