@@ -1194,3 +1194,125 @@ This broke dynamic / SPA pages because:
   - `free-web-scraper-v4.0.3-source.tar.gz` (228 KB)
   - `free-web-scraper-v4.0.3-source.zip` (304 KB)
 
+
+---
+
+## v4.0.4 — Fix weather.com.cn WAF bypass (301 redirect detection + WAF-block retry)
+
+**Task ID:** v4.0.4-fix
+**Agent:** main agent (continuation)
+
+### Problem reported (v4.0.3 testing)
+
+User tested v4.0.3 against `https://www.weather.com.cn/` and reported screenshots still failed:
+- Markdown mode worked (curl-impersonate-static, 22674 chars)
+- Screenshot mode returned `statusCode: 301` with only 199 chars of markdown (a stub redirect page, not real weather content)
+- `strategy: full-body-fallback`, `attempts: 1` — never triggered the curl-impersonate fallback
+
+### Root cause
+
+1. **WAF-block detection didn't trigger on 301 status** — openresty WAF returns 301 to a stub "blocked" page instead of a proper 403. The previous detection only matched 403/429/502/503 + short content.
+
+2. **Retry decision didn't recognize WAF-block failures as retryable** — only checked `isRetryableStatus(status)` (403/429/502/503), not the error message produced by WAF-block detection. So a WAF-block failure with status 301 never triggered a retry.
+
+3. **WAF fallback fetch was limited to visual formats** — the lazy curl-impersonate fetch in the retry loop was guarded by `needsVisual`, so markdown-only requests with non-static HTML had no fallback path.
+
+### Fixes (all in `src/lib/crawler/crawler.ts`)
+
+#### A. WAF-block detection — expanded to 5 patterns
+
+```
+1. 403/429/502/503 + content < 500 chars               (was: only this)
+2. 403/429/502/503 + WAF error-page text                (openresty, Forbidden, etc.)
+3. Any status + CF challenge markers                    (cf-challenge, "Just a moment")
+4. Any 3xx/4xx/5xx + WAF error-page text                ← catches 301 redirects to WAF landing pages
+5. Any 3xx/4xx/5xx + content < 200 chars                ← catches short stub error pages
+```
+
+Pattern 4 is the critical fix for weather.com.cn: openresty returns a 301 with a small "blocked" landing page, and pattern 4 now catches it because the page contains "openresty" text on an error status.
+
+#### B. Retry decision — recognizes WAF-block errors
+
+The retry loop's `retryable` check now also matches `WAF/block detected` or `waf-block` in the error message, so WAF-block failures always trigger a retry → curl-impersonate fallback.
+
+#### C. curl-impersonate WAF fallback — works for ALL formats
+
+The lazy fallback fetch in the retry loop dropped the `needsVisual` guard. Now markdown-only requests also fetch curl-impersonate HTML on retry, and the page.route() injection runs for both paths.
+
+### Additional fixes found during 35-test verification
+
+#### D. executeJavascript action — Firecrawl return syntax
+
+Firecrawl passes scripts as `return document.title;` but Playwright's `page.evaluate` throws SyntaxError on bare `return` statements. We detect `return X` scripts (either starting with `return ` or containing `return` in the first line) and wrap them in an IIFE: `(function() { return X; })()`.
+
+This was a silent failure: actions array was processed but the executeJavascript action threw internally, leaving `data.actions` unset. The test framework caught it.
+
+#### E. curl-impersonate isStatic threshold lowered 200 → 50
+
+`example.com` returns only 139 chars of text content but is a legitimate static page. The 200-char threshold rejected it from the curl-impersonate fast path, forcing it through Playwright unnecessarily. Lowered to 50 chars.
+
+#### F. attributes format on curl-impersonate fast path
+
+When curl-impersonate's static fast path runs (markdown-only), it previously skipped attributes extraction entirely because there's no browser. Now we do server-side regex extraction for simple tag selectors (`title`, `meta`, `h1`, etc.) so the fast path also handles the `attributes` format.
+
+### Files changed
+
+- `src/lib/crawler/crawler.ts` — main fix (~165 lines changed)
+- `src/lib/crawler/curl-impersonate.ts` — isStatic threshold 200 → 50
+- `src/lib/crawler/config.ts` — version 4.0.3 → 4.0.4
+- `src/app/api/status/route.ts` — version 4.0.3 → 4.0.4
+- `src/components/docs/hero.tsx`, `src/components/footer.tsx` — version display
+- `build-standalone.sh`, `package.json` — version bump
+
+### Verification (35/35 tests pass)
+
+The full test suite ran with the project at `/home/z/my-project` root (using fullstack-dev skill), CRAWLER_ALLOW_ROBOTS_OVERRIDE=true, CRAWLER_ROBOTS_CACHE_TTL_MS=5000, Playwright Chromium installed, node-curl-impersonate installed.
+
+```
+── 1. Health check ──                          ✓ GET /api/status returns version 4.0.4
+── 2. Basic markdown scrape ──                  ✓ markdown, html, rawHtml, links, all 4
+── 3. Screenshot format ──                      ✓ static, JS-rendered, markdown+screenshot
+── 4. Branding format ──                        ✓
+── 5. Images format ──                          ✓
+── 6. /v2/map ──                                ✓
+── 7. /v2/scrape/batch (sync) ──                ✓ 2 URLs
+── 8. /v2/batch/scrape (async) ──               ✓ started, completed in 4s, 2 results
+── 9. /v2/crawl ──                              ✓ started, completed in 4s, ≥1 page
+── 10. /v2/parse ──                             ✓
+── 11. /search (SearxNG) ──                     ✓ returns JSON array
+── 12. /v2/search (Firecrawl) ──                ✓
+── 13. /v1/* backward compat ──                 ✓ v1 scrape
+── 14. SSRF protection ──                       ✓ 127.0.0.1, 169.254.169.254, file://
+── 15. robots.txt enforcement ──               ✓ /deny → 403 with blockedReason
+── 16. ignoreRobotsTxt override ──             ✓ bypasses /deny
+── 17. nofollow link filtering ──              ✓ 136 (follow=true) vs 94 (default)
+── 18. AI opt-out enforcement ──                ✓ (soft check, layer doesn't crash)
+── 19. attributes format ──                    ✓ title from example.com
+── 20. actions array ──                         ✓ screenshot, executeJavascript (return syntax)
+── 21. curl-impersonate fast path ──            ✓ strategy=curl-impersonate-static
+── 22. 502 / WAF-block retry ──                 ✓ clean response on 404
+
+Final: 35 / 35 passed, 0 failed
+```
+
+### weather.com.cn specific verification
+
+```
+Test 1: markdown only             → 200, curl-impersonate-static, 22674 chars, attempts=1
+Test 2: screenshot only           → 200, text-density,        1209382 bytes PNG, attempts=2
+Test 3: markdown + screenshot     → 200, text-density,        22646 chars + 1209382 bytes, attempts=2
+Test 4: fullPage screenshot       → 200, text-density,        1205046 bytes PNG, attempts=2
+```
+
+The `attempts: 2` confirms the WAF-block detection + curl-impersonate fallback path worked: the first attempt (real Playwright goto) hit the openresty WAF and returned a 301 stub, which triggered WAF-block detection → retry → curl-impersonate HTML injected via page.route() at the real URL → full weather page rendered.
+
+### Release
+
+- Commit: `3ac7059` on main
+- Tag: `v4.0.4` pushed
+- GitHub Release: https://github.com/cshdotcom/free-web-scraper/releases/tag/v4.0.4
+- Assets uploaded:
+  - `nodebyte-crawl-v4.0.4-standalone.zip` (364 MB)
+  - `free-web-scraper-v4.0.4-source.tar.gz` (231 KB)
+  - `free-web-scraper-v4.0.4-source.zip` (308 KB)
+
