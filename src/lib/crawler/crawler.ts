@@ -280,18 +280,29 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   const maxRetries = opts.maxRetries ?? config.maxRetries;
 
   // ---- Pre-request layer: curl-impersonate (TLS fingerprint) ----
-  // ALWAYS try curl-impersonate first, regardless of requested formats.
-  // Even when screenshot/branding/images are needed, we can use the
-  // curl-impersonate HTML to render in Playwright via page.setContent()
-  // — bypassing the site's TLS/WAF block on Playwright's Chromium.
+  // We use curl-impersonate SELECTIVELY:
   //
-  // Strategy:
-  //   1. curl-impersonate fetch (Chrome TLS fingerprint).
-  //   2. If success + static HTML + no visual formats needed → parse
-  //      directly, skip Playwright entirely.
-  //   3. If success + static HTML + visual formats needed → render the
-  //      HTML in Playwright via page.setContent(), then screenshot/etc.
-  //   4. If curl-impersonate fails → fall back to Playwright navigation.
+  //   1. Markdown-only requests (no screenshot/branding/images):
+  //      Try curl-impersonate FIRST as a fast path. If the response
+  //      is static HTML, parse directly and skip Playwright entirely
+  //      (big speedup for static sites). If non-static or curl-impersonate
+  //      fails, fall through to Playwright goto.
+  //
+  //   2. Visual format requests (screenshot/branding/images):
+  //      Start with Playwright real navigation (page.goto). This is the
+  //      ONLY way to correctly render dynamic / SPA pages — JS bundles,
+  //      CSS, images, and lazy-loaded content all need the real URL
+  //      context to load. If goto is WAF-blocked (403 / TLS error), the
+  //      retry loop fetches curl-impersonate HTML and injects it via
+  //      page.route(url, fulfill) — the cached HTML is served at the
+  //      real URL (so relative URLs resolve correctly, JS sees the
+  //      correct location.href, and sub-resources still load from
+  //      the real origin).
+  //
+  // This replaces the previous setContent() approach (v4.0.2) which
+  // loaded curl-impersonate HTML at about:blank — that broke dynamic
+  // pages because all relative URLs (CSS/JS/images) failed to resolve
+  // and SPA skeletons never rendered.
   const needsVisual = formats.includes('screenshot') || formats.includes('branding') || formats.includes('images');
   const canUseImpersonate = !(opts.actions?.length);
   const followNofollowOpt = opts.followNofollow === true;
@@ -300,18 +311,22 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
   const impersonateUserAgent = opts.userAgent || '';
   const impersonateDevice = opts.device ?? 'auto';
 
-  // Store the curl-impersonate result for potential Playwright rendering.
+  // Storage for curl-impersonate fallback (populated lazily, only when
+  // needed: either for the markdown-only fast path, or as a WAF
+  // fallback during the retry loop for visual formats).
   let impersonateHtml: string | null = null;
   let impersonateStatusCode = 0;
   let impersonateFinalUrl = '';
+  let impersonateTried = false;
 
-  if (canUseImpersonate) {
+  if (canUseImpersonate && !needsVisual) {
     const impersonateUa = impersonateUserAgent || pickDeviceProfile(impersonateDevice).userAgent;
     const impersonateResult = await impersonateFetch(safeUrl, impersonateUa, {
       cookies: impersonateCookies,
       timeout: Math.min(timeout, 15000),
       headers: impersonateHeaders,
     });
+    impersonateTried = true;
 
     if (impersonateResult.success) {
       // Check HTTP headers for AI opt-out (layer 3).
@@ -344,13 +359,15 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
         };
       }
 
-      // Store for potential Playwright rendering.
+      // Cache the result for potential Playwright fallback (if the
+      // markdown fast path doesn't apply and we end up needing to
+      // retry through Playwright).
       impersonateHtml = impersonateResult.body;
       impersonateStatusCode = impersonateResult.status;
       impersonateFinalUrl = impersonateResult.finalUrl || safeUrl;
 
-      // If no visual formats needed, parse directly and return.
-      if (!needsVisual && impersonateResult.isStatic) {
+      // Static HTML fast path: parse directly and return, skip Playwright.
+      if (impersonateResult.isStatic) {
         console.log(`[crawler] curl-impersonate hit (status ${impersonateResult.status}, ${impersonateResult.body.length} bytes) — skipping Playwright`);
 
         const fb = fallbackExtract(impersonateResult.body, safeUrl);
@@ -391,13 +408,14 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
         return { success: true, data, attempts: 1 };
       }
 
-      // Visual formats needed but we have HTML from curl-impersonate.
-      // We'll render it in Playwright below via page.setContent().
-      console.log(`[crawler] curl-impersonate got HTML (${impersonateResult.body.length} bytes) — will render in Playwright for visual formats`);
+      // curl-impersonate got non-static HTML or the request needs
+      // Playwright rendering. Fall through to the Playwright path.
+      // For markdown-only with non-static HTML, attemptScrape will be
+      // called with the cached HTML as a prerender fallback (used only
+      // if the Playwright goto fails with WAF/403).
+      console.log(`[crawler] curl-impersonate got non-static HTML (${impersonateResult.body.length} bytes) — falling through to Playwright goto`);
     } else {
-      if (!impersonateResult.success) {
-        console.log(`[crawler] curl-impersonate failed (status ${impersonateResult.status}) — falling back to Playwright`);
-      }
+      console.log(`[crawler] curl-impersonate failed (status ${impersonateResult.status}) — falling back to Playwright goto`);
     }
   }
 
@@ -424,6 +442,66 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     } catch {
       try { browser = await getBrowser(); } catch { /* give up */ }
     }
+
+    // ---- curl-impersonate WAF fallback (visual formats only) ----
+    // On the first retry attempt (attempt > 0) for visual format
+    // requests, lazily fetch curl-impersonate HTML to inject via
+    // page.route() — this lets us bypass TLS/WAF blocks that reject
+    // Playwright's Chromium fingerprint while still rendering the
+    // page at its real URL (so relative URLs and JS see the correct
+    // origin). For markdown-only requests, curl-impersonate was
+    // already tried up front (and is cached in impersonateHtml).
+    if (needsVisual && attempt > 0 && !impersonateTried && canUseImpersonate) {
+      console.log(`[crawler] Playwright goto was blocked (attempt ${attempt}) — fetching curl-impersonate HTML as WAF fallback`);
+      try {
+        const fbUa = impersonateUserAgent || pickDeviceProfile(impersonateDevice).userAgent;
+        const fb = await impersonateFetch(safeUrl, fbUa, {
+          cookies: impersonateCookies,
+          timeout: Math.min(timeout, 15000),
+          headers: impersonateHeaders,
+        });
+        impersonateTried = true;
+        if (fb.success) {
+          // Re-check AI opt-out on the fallback HTML (defensive).
+          const headerResult = checkHeadersForAiOptOut(
+            new Headers(Object.entries(fb.headers).map(([k, v]) => [k, v])),
+          );
+          if (!headerResult.ok) {
+            return {
+              success: false,
+              error: headerResult.reason,
+              data: {
+                metadata: { sourceURL: safeUrl, statusCode: 403, error: headerResult.reason } as PageMetadata,
+                statusCode: 403,
+                blockedReason: headerResult.reason,
+              },
+            };
+          }
+          const htmlResult = checkHtmlForAiOptOut(fb.body);
+          if (!htmlResult.ok) {
+            return {
+              success: false,
+              error: htmlResult.reason,
+              data: {
+                metadata: { sourceURL: safeUrl, statusCode: 403, error: htmlResult.reason } as PageMetadata,
+                statusCode: 403,
+                blockedReason: htmlResult.reason,
+              },
+            };
+          }
+          impersonateHtml = fb.body;
+          impersonateStatusCode = fb.status;
+          impersonateFinalUrl = fb.finalUrl || safeUrl;
+          console.log(`[crawler] curl-impersonate WAF fallback got HTML (${fb.body.length} bytes, status ${fb.status}) — will inject via page.route()`);
+        } else {
+          console.log(`[crawler] curl-impersonate WAF fallback also failed (status ${fb.status})`);
+        }
+      } catch (e) {
+        impersonateTried = true;
+        console.log(`[crawler] curl-impersonate WAF fallback threw: ${(e as Error).message}`);
+      }
+    }
+
     // If user provided a custom UA, use it. Otherwise pick a device profile
     // (UA + viewport + touch) based on the `device` option.
     // `mobile: true` is a Firecrawl-compatible shortcut for device: 'mobile'.
@@ -434,6 +512,12 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
     // Screenshot viewport override (Firecrawl screenshot.viewport)
     const screenshotViewport = opts.screenshot?.viewport;
     const viewport = screenshotViewport ?? profile.viewport;
+
+    // Only use curl-impersonate HTML as a prerender fallback on RETRY
+    // attempts (attempt > 0). On the first attempt we want real Playwright
+    // goto so the page renders normally with all JS/CSS/images. The
+    // fallback is only useful when the first attempt was WAF-blocked.
+    const usePrerenderFallback = attempt > 0 && impersonateHtml !== null;
     const result = await attemptScrape(browser, safeUrl, {
       formats, onlyMainContent, includeTags, excludeTags,
       timeout, waitFor, removeBase64Images,
@@ -450,7 +534,7 @@ export async function scrapeUrl(opts: ScrapeOptions): Promise<ScrapeResult> {
       screenshot: opts.screenshot,
       attributes: opts.attributes,
       followNofollow: followNofollowOpt,
-    }, impersonateHtml);
+    }, usePrerenderFallback ? impersonateHtml : null, impersonateStatusCode);
 
     if (result.success) {
       return { ...result, attempts };
@@ -514,10 +598,17 @@ async function attemptScrape(
   browser: Browser,
   url: string,
   params: AttemptParams,
-  // When provided, render this HTML directly via page.setContent()
-  // instead of navigating to the URL. Used when curl-impersonate
-  // fetched the HTML but we need Playwright for screenshots/branding.
+  // When provided, the main document request for this URL is intercepted
+  // via page.route() and fulfilled with this cached HTML. This bypasses
+  // TLS/WAF blocks that reject Playwright's Chromium fingerprint, while
+  // still loading the page at its real URL — so relative URLs resolve
+  // correctly, JS sees the right location.href, and sub-resources
+  // (CSS, JS, images) still load from the real origin.
+  // Used as a WAF fallback when Playwright goto fails with 403/TLS error.
   prerenderedHtml?: string | null,
+  // HTTP status code to report when serving prerenderedHtml (from
+  // curl-impersonate). Defaults to 200.
+  prerenderedStatus?: number,
 ): Promise<ScrapeResult> {
   let page: Page | null = null;
   let context: BrowserContext | null = null;
@@ -618,35 +709,70 @@ async function attemptScrape(
 
     // Navigate and wait for network to be mostly idle so JS-rendered
     // content has time to populate the DOM.
-    // Note: Playwright throws ERR_HTTP_RESPONSE_CODE_FAILURE for 4xx/5xx
-    // responses by default. We catch this and still proceed with extraction
-    // so the user gets the status code + page content (error pages are
-    // still useful for debugging).
-    // Navigate to the URL or render pre-fetched HTML.
+    //
+    // When `prerenderedHtml` is provided (WAF fallback), we register a
+    // route handler that intercepts the main document request and
+    // fulfills it with the cached curl-impersonate HTML. The page loads
+    // at its real URL (preserving the document origin so relative URLs
+    // resolve correctly and JS sees the right location.href), while
+    // sub-resources (CSS, JS, images) still load from the real origin
+    // — they may or may not also be WAF-blocked, but at least they try.
+    //
+    // This replaces the previous setContent() approach which loaded
+    // HTML at about:blank — that broke dynamic pages because all
+    // relative URLs (CSS/JS/images) failed to resolve and SPA skeletons
+    // never rendered.
     let navResp: Response | null = null;
     if (prerenderedHtml) {
-      // Render the curl-impersonate HTML in Playwright — no network
-      // request needed, bypasses TLS/WAF blocks entirely.
-      console.log('[crawler] Rendering curl-impersonate HTML via page.setContent()');
-      statusCode = 200; // We already know the status from curl-impersonate.
-      await page.setContent(prerenderedHtml, {
+      console.log(`[crawler] Registering page.route() to inject curl-impersonate HTML at the real URL (status ${prerenderedStatus || 200})`);
+      // Intercept the main document request for this URL. Only fulfill
+      // the first document-type request (the navigation itself) so
+      // sub-resources (CSS/JS/images) and iframe documents fall through
+      // to the real network and can load normally.
+      let mainDocServed = false;
+      await page.route(url, async (route: import('playwright').Route) => {
+        try {
+          const req = route.request();
+          if (!mainDocServed && req.resourceType() === 'document') {
+            mainDocServed = true;
+            await route.fulfill({
+              status: prerenderedStatus || 200,
+              contentType: 'text/html; charset=utf-8',
+              body: prerenderedHtml,
+            });
+            return;
+          }
+          await route.continue();
+        } catch {
+          try { await route.continue(); } catch { /* ignore */ }
+        }
+      });
+    }
+
+    try {
+      navResp = await page.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: params.timeout,
       });
-    } else {
-      try {
-        navResp = await page.goto(url, {
-          waitUntil: 'domcontentloaded',
-          timeout: params.timeout,
-        });
-      } catch (navErr: any) {
-        const msg = navErr?.message || '';
-        if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
-          lastError = `Navigation returned non-2xx status (page may still have content)`;
-        } else {
-          throw navErr;
-        }
+    } catch (navErr: any) {
+      const msg = navErr?.message || '';
+      if (msg.includes('ERR_HTTP_RESPONSE_CODE_FAILURE') || msg.includes('net::ERR_ABORTED')) {
+        lastError = `Navigation returned non-2xx status (page may still have content)`;
+      } else if (prerenderedHtml && /net::ERR_FAILED|net::ERR_HTTP_RESPONSE_CODE_FAILURE|Target closed/i.test(msg)) {
+        // When we have prerendered HTML and the real goto still fails
+        // (e.g., site blocks even sub-resource requests), continue
+        // anyway — the route handler served the main document, so the
+        // page has content; we just couldn't get a navResp object.
+        lastError = `Navigation blocked after prerender inject (page content may still be available)`;
+      } else {
+        throw navErr;
       }
+    }
+
+    // If we used prerendered HTML and got no navResp, synthesize the
+    // status code from curl-impersonate.
+    if (prerenderedHtml && !navResp && !statusCode) {
+      statusCode = prerenderedStatus || 200;
     }
 
     if (navResp) {
@@ -894,6 +1020,29 @@ async function attemptScrape(
       } catch {
         // keep original extraction
       }
+    }
+
+    // ---- WAF block detection (retryable failure) ----
+    // If the navigation returned a WAF-block status code (403/429/503)
+    // AND we extracted almost no content, treat this as a retryable
+    // failure so the retry loop can fetch curl-impersonate HTML as a
+    // WAF fallback (visual formats) or try a different UA. We skip this
+    // when we already used prerenderedHtml (already in fallback mode) to
+    // avoid infinite loops.
+    if (
+      !prerenderedHtml &&
+      (statusCode === 403 || statusCode === 429 || statusCode === 503 || statusCode === 502) &&
+      extracted.contentHtml.replace(/<[^>]+>/g, '').trim().length < 500
+    ) {
+      console.log(`[crawler] WAF block detected (status ${statusCode}, content too short) — returning retryable failure`);
+      return {
+        success: false,
+        error: `WAF block detected (HTTP ${statusCode}, content too short) — will retry with curl-impersonate fallback`,
+        data: {
+          metadata: { ...extracted.metadata, statusCode, error: 'waf-block', sourceURL: url } as PageMetadata,
+          statusCode,
+        },
+      };
     }
 
     // ---- Layer 4: HTML <meta> AI opt-out check ----
