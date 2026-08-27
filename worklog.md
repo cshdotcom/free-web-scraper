@@ -1316,3 +1316,110 @@ The `attempts: 2` confirms the WAF-block detection + curl-impersonate fallback p
   - `free-web-scraper-v4.0.4-source.tar.gz` (231 KB)
   - `free-web-scraper-v4.0.4-source.zip` (308 KB)
 
+
+---
+
+## v4.0.5 — Per-URL cookies + nature.com multi-article fix + crawler hang fix + sitemap depth default 5
+
+**Task ID:** v4.0.5-fix
+**Agent:** main agent (continuation)
+
+### User-reported issues + new feature requests
+
+1. nature.com markdown only returned 431 chars while screenshot was full
+2. Crawler hangs on weather.com.cn screenshot path (WAF prerender)
+3. Sitemap max depth default should be 5 (was 3 in store.ts); also clarify that 'depth' only counts sitemap-index recursion, NOT article internal links
+4. Add per-URL cookie support to batch sync + batch async + crawl, with cookie isolation verification. Frontend must auto-detect URL count and pop up that many cookie input fields, scrollable.
+
+### Fix 1: nature.com markdown only returning first `<article>` (extractor.ts)
+
+**Root cause:** `fallbackExtract` used a non-global regex to match the FIRST `<article>` tag only. nature.com has 31 `<article>` elements (one per news card); we were returning just the first one (the hero) — 431 chars.
+
+**Fix:** Use global regex match to collect ALL `<article>` elements, then concatenate them inside a wrapper `<div>` when there's more than one. Same for `<main>`.
+
+**Verified:** nature.com markdown went from 431 → 11360 chars, with 26 article headlines extracted (was 1).
+
+### Fix 2: Crawler hang on WAF prerender path (crawler.ts)
+
+**Root cause:** When the WAF-block fallback triggers, `page.route(url, fulfill)` injects curl-impersonate HTML at the real URL — but every sub-resource request (CSS/JS/images) still goes to the real server, which is WAF-blocking Playwright. Each request hung up to 45s, and `page.goto` could stall while `networkidle` waited.
+
+**Fix:**
+- Cap `page.goto` at 15s when prerenderedHtml is set.
+- Register a global route handler that gives every sub-resource an 8s timeout (instead of 45s).
+- Cap the lazy-scroll loop at 30 iterations (was unbounded — could run 62+ scrolls on tall pages).
+- Catch Timeout errors in the prerender goto so they fall through.
+
+**Verified:** weather.com.cn screenshot completes in 9s (was hanging >45s).
+
+### Fix 3: Sitemap depth default 5 + clear documentation
+
+- `store.ts`: `?? 3` → `?? 5` for `discoverSitemaps` call.
+- `sitemap.ts`: expanded docstring with explicit example showing depth counts ONLY sitemapindex → sitemapindex / urlset recursion.
+- `data.ts` docs updated: "ONLY counts sitemap-index recursion. Article internal links are NOT counted — they are followed by the BFS crawl's own maxDepth. Default 5."
+
+### Feature 4: Per-URL cookies for batch sync + async + crawl
+
+**Three forms accepted for batch endpoints** (`/v2/scrape/batch`, `/v2/batch/scrape`, v1 aliases):
+1. SHARED: single string or CookieInput[], applied to ALL urls.
+2. PER-URL: array whose length matches urls.length, aligned by index.
+3. MIXED: array of length 1 is treated as shared.
+
+**For `/v2/crawl`:**
+- `cookies`: single cookie for seed + URLs whose hostname isn't in cookiesByDomain.
+- `cookiesByDomain`: map of hostname → cookie. Subdomain fallback (longest matching parent wins). URLs whose hostname matches no key fall back to the shared cookies.
+
+**Cookie isolation GUARANTEED:** The existing fresh-browser-context-per-scrape design (each scrapeUrl call creates a NEW `browser.newContext()`, injects cookies, runs the page, then `context.close()` destroys all cookies) ensures no leakage. The per-URL plumbing just makes sure each `scrapeUrl` call gets its OWN cookies.
+
+**Frontend changes:**
+- `batch-sync-tab.tsx` + `batch-async-tab.tsx`: "Cookies" toggle button → scrollable panel with one cookie input per URL (auto-synced with URL list).
+- `crawl-tab.tsx`: "Cookies" toggle button → Shared cookies input + cookiesByDomain JSON textarea (client-side validated).
+
+### Files changed (18 files)
+
+- src/lib/crawler/extractor.ts — collect ALL <article>/<main> tags
+- src/lib/crawler/crawler.ts — prerender path timeout cap + scroll cap
+- src/lib/crawler/sitemap.ts — docstring clarifying depth semantics
+- src/lib/crawler/store.ts — sitemap depth 5 + cookiesPerUrl + cookiesByDomain
+- src/lib/crawler/config.ts — version 4.0.4 → 4.0.5
+- src/app/v2/scrape/batch/route.ts — per-URL cookies
+- src/app/v2/batch/scrape/route.ts — per-URL cookies
+- src/app/v1/scrape/batch/route.ts — per-URL cookies (v1 back-compat)
+- src/app/v1/batch/scrape/route.ts — per-URL cookies (v1 back-compat)
+- src/components/test/batch-sync-tab.tsx — per-URL cookie UI
+- src/components/test/batch-async-tab.tsx — per-URL cookie UI
+- src/components/test/crawl-tab.tsx — cookie + cookiesByDomain UI
+- src/components/docs/data.ts — document new cookie formats
+- src/components/docs/hero.tsx, src/components/footer.tsx — version display
+- src/app/api/status/route.ts — version bump
+- build-standalone.sh, package.json — version bump
+
+### Verification — 23/23 tests pass
+
+Full test suite (scripts/test-v4.0.5.sh):
+
+```
+1.  Health check (version 4.0.5)                                    ✓
+2.  nature.com markdown fix (431→11360 chars, 26 headlines)         ✓
+3.  Sync batch per-URL cookies (URL1 only A, URL2 only B)            ✓
+4.  Async batch per-URL cookies (URL1 only C, URL2 only D)           ✓
+5.  Shared cookie string (both URLs receive it)                      ✓
+6.  Cookie isolation (3-URL batch, no leakage)                       ✓
+7.  Crawl cookiesByDomain (seed receives hostname-matched cookie)   ✓
+8.  Basic regression (scrape, batch, SSRF, robots.txt)               ✓
+9.  Crawler hang fix (weather.com.cn screenshot in 9s)                ✓
+10. nature.com screenshot still works (1.3 MB PNG)                   ✓
+11. Sitemap depth default 5 (docs verify)                            ✓
+
+Final: 23 / 23 passed, 0 failed
+```
+
+### Release
+
+- Commit: `252d26a` on main
+- Tag: `v4.0.5` pushed
+- GitHub Release: https://github.com/cshdotcom/free-web-scraper/releases/tag/v4.0.5
+- Assets uploaded:
+  - `nodebyte-crawl-v4.0.5-standalone.zip` (363 MB)
+  - `free-web-scraper-v4.0.5-source.tar.gz` (240 KB)
+  - `free-web-scraper-v4.0.5-source.zip` (319 KB)
+
