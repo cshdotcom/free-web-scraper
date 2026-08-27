@@ -78,13 +78,55 @@ cp "${ROOT}/.env.example" "${PKG}/.env.example" 2>/dev/null || true
 
 echo "[build] Copying bundled browser..."
 mkdir -p "${PKG}/browsers"
-# Try mini-services first, then system cache
+# Copy the bundled Chromium. The browser version must match what
+# the installed playwright version expects (e.g. playwright 1.62.1
+# needs chromium-1234; older playwright 1.49 needs chromium-1200).
+# We copy whatever version(s) exist in the system cache so the
+# package works with whatever playwright is installed.
+#
+# Also install the matching browser version if the system has a
+# playwright install but is missing the browser. This handles the
+# common case where the dev machine has playwright 1.62.1 installed
+# (which needs chromium-1234) but only chromium-1200 was cached from
+# an older playwright.
 if [ -d "${ROOT}/mini-services/crawler-service/browsers" ]; then
   cp -r "${ROOT}/mini-services/crawler-service/browsers/." "${PKG}/browsers/"
 elif [ -d "${HOME}/.cache/ms-playwright" ]; then
-  cp -r "${HOME}/.cache/ms-playwright/chromium-1200" "${PKG}/browsers/" 2>/dev/null
-  cp -r "${HOME}/.cache/ms-playwright/chromium_headless_shell-1200" "${PKG}/browsers/" 2>/dev/null
-  cp -r "${HOME}/.cache/ms-playwright/ffmpeg-1011" "${PKG}/browsers/" 2>/dev/null
+  # Copy ALL chromium versions found in the cache — the runtime
+  # picks the one matching its installed playwright version.
+  for d in "${HOME}/.cache/ms-playwright"/chromium-* "${HOME}/.cache/ms-playwright"/chromium_headless_shell-*; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    if [ ! -d "${PKG}/browsers/${name}" ]; then
+      cp -r "$d" "${PKG}/browsers/${name}/" 2>/dev/null && echo "  ✓ ${name}"
+    fi
+  done
+  # Also copy ffmpeg (used by playwright for video recording).
+  for d in "${HOME}/.cache/ms-playwright"/ffmpeg-*; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    if [ ! -d "${PKG}/browsers/${name}" ]; then
+      cp -r "$d" "${PKG}/browsers/${name}/" 2>/dev/null && echo "  ✓ ${name}"
+    fi
+  done
+fi
+# Ensure the matching browser is installed. If the installed playwright
+# version (in node_modules) expects a chromium version that's NOT in
+# the cache, install it now so the package has the right browser.
+# This is critical because playwright's binary path lookup uses the
+# exact version (e.g. chromium-1234 not chromium-1200).
+if [ -d "${ROOT}/node_modules/playwright-core" ]; then
+  # Read the expected chromium revision from playwright-core.
+  # The file is at node_modules/playwright-core/browsers.json.
+  BROWSERS_JSON="${ROOT}/node_modules/playwright-core/browsers.json"
+  if [ -f "$BROWSERS_JSON" ]; then
+    # Extract the chromium revision (first match).
+    CHROMIUM_REV=$(grep -oE '"revision": "[0-9]+"' "$BROWSERS_JSON" | head -1 | grep -oE '[0-9]+')
+    if [ -n "$CHROMIUM_REV" ] && [ ! -d "${PKG}/browsers/chromium-${CHROMIUM_REV}" ]; then
+      echo "[build] Installing chromium-${CHROMIUM_REV} (expected by installed playwright)..."
+      PLAYWRIGHT_BROWSERS_PATH="${PKG}/browsers" npx playwright install chromium-headless-shell 2>&1 | tail -3
+    fi
+  fi
 fi
 
 echo "[build] Copying bundled fonts (CJK + Latin + Emoji)..."
@@ -122,6 +164,10 @@ cp "${ROOT}/install-deps.sh" "${PKG}/install-deps.sh" 2>/dev/null || true
 chmod +x "${PKG}/install-deps.sh" 2>/dev/null || true
 cp "${ROOT}/prisma/nodebyte-crawl.sql" "${PKG}/nodebyte-crawl.sql" 2>/dev/null || true
 cp "${ROOT}/prisma/schema.prisma" "${PKG}/prisma-schema.prisma" 2>/dev/null || true
+# Copy the Turbopack chunk-id shim (rewrites require('playwright-HASH')
+# → require('playwright') so the standalone server can find packages
+# that Turbopack auto-externalised with internal chunk-id hashes).
+cp "${ROOT}/turbopack-shim.js" "${PKG}/turbopack-shim.js" 2>/dev/null || true
 
 cat > "${PKG}/start.sh" << 'LAUNCHER'
 #!/bin/bash
@@ -210,6 +256,9 @@ if [ ! -f "server.js" ]; then
     echo "Found server.js at: $FOUND"
     echo "Trying to run it from its location..."
     cd "$(dirname "$FOUND")"
+    if [ -f "$DIR/turbopack-shim.js" ]; then
+      export NODE_OPTIONS="--require $DIR/turbopack-shim.js"
+    fi
     if node --version 2>/dev/null | grep -qE '^v(2[0-9]|[3-9][0-9])'; then
       node --env-file="$DIR/.env" "$(basename "$FOUND")"
     else
@@ -218,6 +267,15 @@ if [ ! -f "server.js" ]; then
     exit $?
   fi
   exit 1
+fi
+# Load the Turbopack chunk-id shim BEFORE server.js. The shim rewrites
+# require('playwright-9b51c99ca474dcf1') → require('playwright') so
+# Turbopack's auto-externalised packages resolve correctly at runtime.
+# Without this, the server crashes with
+#   "Cannot find package 'playwright-9b51c99ca474dcf1'"
+# on the first request that needs Playwright (e.g. screenshot format).
+if [ -f "$DIR/turbopack-shim.js" ]; then
+  export NODE_OPTIONS="--require $DIR/turbopack-shim.js"
 fi
 if node --version 2>/dev/null | grep -qE '^v(2[0-9]|[3-9][0-9])'; then
   node --env-file="$DIR/.env" server.js
@@ -237,7 +295,7 @@ LAUNCHER
 chmod +x "${PKG}/start.sh"
 
 cat > "${PKG}/README.md" << 'README'
-# NodeByte Crawl v4.0.7 — Standalone (Single Port)
+# NodeByte Crawl v4.0.8 — Standalone (Single Port)
 
 One port serves docs + API. Bundled Chromium included.
 

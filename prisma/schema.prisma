@@ -12,10 +12,19 @@ datasource db {
 }
 
 /// Async crawl/batch jobs. Stored in DB so they survive server restarts.
+///
+/// status values:
+///   'pending'    — crawl job is in sitemap-discovery phase (URLs being
+///                  collected from robots.txt + sitemap.xml + on-page
+///                  links before BFS scraping starts). Frontend shows
+///                  a "Discovering sitemap URLs…" banner.
+///   'scraping'   — BFS loop is actively scraping pages.
+///   'completed'  — job finished (success or partial failure).
+///   'failed'     — job crashed or was cancelled.
 model Job {
   id        String   @id @db.VarChar(191)
   type      String   @db.VarChar(50)   // 'crawl' | 'batch'
-  status    String   @db.VarChar(50)   // 'scraping' | 'completed' | 'failed'
+  status    String   @db.VarChar(50)   // 'pending' | 'scraping' | 'completed' | 'failed'
   total     Int      @default(0)
   completed Int      @default(0)
   data      String   @db.LongText     // JSON: [{url, success, data, error}]

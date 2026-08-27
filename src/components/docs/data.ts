@@ -249,15 +249,64 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         description: 'Cookies for the batch — three forms accepted. (1) SHARED: a single string "k=v; k2=v2" or CookieInput[] applied to ALL urls. (2) PER-URL: an array whose length matches urls.length, where each entry is a string or CookieInput[] applied to that specific URL only (alignment by index). (3) MIXED: array of length 1 is treated as shared (the single cookie for all). Every URL still gets its OWN fresh browser context — no cookie leakage between URLs in the batch.',
       },
     ],
-    requestExample: JSON.stringify(
-      {
-        urls: ['https://example.com', 'https://example.org'],
-        formats: ['markdown'],
-        onlyMainContent: true,
-      },
-      null,
-      2,
-    ),
+    requestExample: `// === Basic sync batch (no cookies) ===
+${JSON.stringify(
+  {
+    urls: ['https://example.com', 'https://example.org'],
+    formats: ['markdown'],
+    onlyMainContent: true,
+  },
+  null,
+  2,
+)}
+
+// === Per-URL cookies (array aligned with urls by index) ===
+// Each URL receives ONLY its own cookies — no leakage between
+// URLs in the batch. Every URL gets its own fresh browser
+// context. cookies.length MUST match urls.length when using
+// per-URL form.
+${JSON.stringify(
+  {
+    urls: [
+      'https://admin.example.com/dashboard',
+      'https://shop.example.com/cart',
+      'https://api.example.com/data',
+    ],
+    formats: ['markdown'],
+    cookies: [
+      'session=admin_abc; admin_flag=1',
+      'session=shop_xyz; cart_id=42',
+      '',  // empty string = no cookies for this URL
+    ],
+  },
+  null,
+  2,
+)}
+
+// === Shared cookie (single string for all URLs) ===
+${JSON.stringify(
+  {
+    urls: ['https://example.com/page1', 'https://example.com/page2'],
+    formats: ['markdown'],
+    cookies: 'shared_session=abc123',
+  },
+  null,
+  2,
+)}
+
+// === Per-URL CookieInput[] (object form) ===
+${JSON.stringify(
+  {
+    urls: ['https://example.com/a', 'https://example.com/b'],
+    formats: ['markdown'],
+    cookies: [
+      [{ name: 'session', value: 'a_session', domain: '.example.com' }],
+      [{ name: 'session', value: 'b_session', domain: '.example.com' }],
+    ],
+  },
+  null,
+  2,
+)}`,
     responseExample: JSON.stringify(
       {
         success: true,
@@ -577,20 +626,84 @@ function buildEndpoints(baseUrl: string): EndpointDef[] {
         description: 'Same fields as /v2/scrape. Key options: formats, onlyMainContent, device, mobile, cookies (string or array, isolated per request), cookiesByDomain (per-domain override map), userAgent, actions, location, headers, includeTags, excludeTags, timeout, waitFor, maxRetries.',
       },
     ],
-    requestExample: JSON.stringify(
-      {
-        url: 'https://example.com',
-        maxDepth: 2,
-        limit: 20,
-        includePaths: ['^/blog/.*$', '^/docs/.*$'],
-        excludePaths: ['^/admin/.*$'],
-        allowSubdomains: true,
-        sitemap: 'include',
-        scrapeOptions: { formats: ['markdown'], onlyMainContent: true, device: 'desktop' },
+    requestExample: `// === Basic crawl ===
+${JSON.stringify(
+  {
+    url: 'https://example.com',
+    maxDepth: 2,
+    limit: 20,
+    includePaths: ['^/blog/.*$', '^/docs/.*$'],
+    excludePaths: ['^/admin/.*$'],
+    allowSubdomains: true,
+    sitemap: 'include',
+    scrapeOptions: { formats: ['markdown'], onlyMainContent: true, device: 'desktop' },
+  },
+  null,
+  2,
+)}
+
+// === Crawl with sitemap depth + sitemap limit ===
+// Use sitemapDepth to cap sitemap-index recursion (default 5, max 10).
+// Use sitemapLimit to cap total URLs extracted from the sitemap
+// (0 = unlimited, default 0; set to N to stop after N URLs).
+// Both are useful for sites with huge sitemaps (e.g. nature.com
+// has 40,093 child sitemaps — without sitemapLimit, discovery
+// takes hours; with sitemapLimit=20 it finishes in seconds).
+${JSON.stringify(
+  {
+    url: 'https://www.nature.com/',
+    maxDepth: 1,
+    limit: 20,
+    sitemap: 'include',
+    sitemapDepth: 5,
+    sitemapLimit: 20,
+    scrapeOptions: { formats: ['markdown'], onlyMainContent: true },
+  },
+  null,
+  2,
+)}
+
+// === Crawl with per-domain cookies ===
+// 'cookies' is applied to the seed + any discovered URL whose
+// hostname is NOT in cookiesByDomain. 'cookiesByDomain' is a map
+// of hostname → cookie string. For each discovered URL, the
+// longest matching parent hostname wins (subdomain fallback).
+${JSON.stringify(
+  {
+    url: 'https://example.com',
+    maxDepth: 2,
+    limit: 50,
+    sitemap: 'include',
+    scrapeOptions: {
+      formats: ['markdown'],
+      cookies: 'shared_session=abc123',
+      cookiesByDomain: {
+        'admin.example.com': 'admin_session=admin_xyz; admin_flag=1',
+        'shop.example.com': 'shop_session=shop_123; cart_id=42',
       },
-      null,
-      2,
-    ),
+    },
+  },
+  null,
+  2,
+)}
+
+// === Crawl with sitemapPath (explicit sitemap URL) ===
+// When set, auto-discovery (robots.txt + common paths) is
+// skipped. The crawler fetches this URL and auto-detects:
+// XML sitemap → parse as sitemap; HTML page → extract all
+// <a href> links using this path's directory as the base.
+${JSON.stringify(
+  {
+    url: 'https://example.com/blog/',
+    maxDepth: 1,
+    limit: 50,
+    sitemap: 'only',
+    sitemapPath: 'https://example.com/blog/',
+    scrapeOptions: { formats: ['markdown'] },
+  },
+  null,
+  2,
+)}`,
     responseExample: JSON.stringify(
       {
         success: true,
