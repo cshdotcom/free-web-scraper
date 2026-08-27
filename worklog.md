@@ -1130,3 +1130,67 @@ text.
 - `RELEASE-NOTES.md` (10 KB)
 
 All uploaded to https://github.com/cshdotcom/free-web-scraper/releases/tag/v3.8.1
+
+---
+
+## v4.0.3 — Fix broken dynamic page screenshots (route injection instead of setContent)
+
+**Task ID:** v4.0.3-fix
+**Agent:** main agent (continuation)
+
+### Problem reported
+
+User reported that although all pages were reachable, **dynamic page screenshots** were coming back as either:
+- A blank white page
+- A static unstyled HTML skeleton (no CSS, no JS, no images, no JS-rendered content)
+
+### Root cause (introduced in v4.0.2)
+
+The previous v4.0.2 fix for WAF-protected screenshot sites (weather.com.cn) made curl-impersonate ALWAYS pre-fetch HTML for every scrape request. When visual formats (screenshot/branding/images) were requested, the pre-fetched HTML was loaded into Playwright via `page.setContent()` — which loads HTML at `about:blank`.
+
+This broke dynamic / SPA pages because:
+1. **All relative URLs broke** — CSS, JS, and images resolved against `about:blank` and failed to load. Pages rendered as unstyled static HTML.
+2. **SPA bootstrapping broke** — JS bundles couldn't load (because of broken URLs), so React/Vue/Angular skeletons never rendered. Pages came back as blank.
+3. **JS that inspected `window.location.href`** saw `about:blank` and many SPAs refused to bootstrap.
+
+### Fix
+
+1. **Visual format requests now always try real `page.goto()` first** — the only way to correctly render dynamic pages with JS/CSS/images and the right document origin.
+
+2. **`curl-impersonate` is only used as a WAF fallback** when the first Playwright `goto` is blocked (403 / TLS error). The retry loop lazily fetches curl-impersonate HTML on the second attempt (when the first attempt returned a WAF-block failure).
+
+3. **Replaced `setContent()` with `page.route(url, fulfill)` interception** — the cached curl-impersonate HTML is served at the **real URL** (preserving the document origin so relative URLs resolve correctly, JS sees the correct `location.href`, and sub-resources still load from the real origin). This is the key fix that preserves WAF bypass for weather.com.cn while restoring correct rendering for dynamic pages.
+
+4. **Added WAF-block detection**: if navigation returns 403/429/503/502 AND extracted content is < 500 chars, return a retryable failure so the retry loop triggers the curl-impersonate fallback automatically. Previously, a 403 page with very little content would return success with mostly-empty markdown, never triggering the fallback.
+
+5. **For markdown-only requests**, kept the existing curl-impersonate fast path (static HTML → parse directly, skip Playwright — big speedup). Non-static HTML falls through to real Playwright goto (was also broken by v4.0.2's setContent path).
+
+### Files changed
+
+- `src/lib/crawler/crawler.ts` — core fix (~200 lines):
+  - Rewrote curl-impersonate pre-fetch to only run for markdown-only requests (not visual)
+  - Replaced `page.setContent(prerenderedHtml)` with `page.route(url, fulfill)` route interception in `attemptScrape`
+  - Added WAF-block detection (403/429/503/502 + < 500 chars → retryable failure)
+  - Added lazy curl-impersonate fallback in the retry loop (only on retry attempts, not first attempt)
+  - Only pass `prerenderedHtml` on retry attempts (`usePrerenderFallback = attempt > 0 && impersonateHtml !== null`)
+- `src/lib/crawler/config.ts` — version bump to 4.0.3
+- `src/app/api/status/route.ts` — version bump
+- `src/components/docs/hero.tsx`, `src/components/footer.tsx` — version display
+- `build-standalone.sh`, `package.json` — version bump
+
+### Verification
+
+- Next.js production build succeeds (compiled in 3.7s, all 24 routes generated)
+- TypeScript strict-mode errors are pre-existing (verified same errors on v4.0.2 HEAD via git stash) — they don't block the Next.js build (Turbopack does type stripping, not full type checking)
+- Standalone package built (821 MB unpacked, 365 MB zipped) with bundled Chromium + multi-language fonts
+
+### Release
+
+- Commit: `c6d56de` on main
+- Tag: `v4.0.3` pushed
+- GitHub Release: https://github.com/cshdotcom/free-web-scraper/releases/tag/v4.0.3
+- Assets uploaded:
+  - `nodebyte-crawl-v4.0.3-standalone.zip` (365 MB)
+  - `free-web-scraper-v4.0.3-source.tar.gz` (228 KB)
+  - `free-web-scraper-v4.0.3-source.zip` (304 KB)
+
